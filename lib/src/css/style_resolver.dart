@@ -145,7 +145,18 @@ class StyleResolver {
     final parent = element.parent;
     final parentTag = (parent?.localName ?? '').toLowerCase();
     if (parentTag != 'td' && parentTag != 'th') return HtmlStyle.empty;
-    final align = (parent?.attributes['align'] ?? '').toLowerCase();
+    // Author CSS on the cell already participates in normal inheritance.
+    // Reapplying its lower-priority HTML hint to the child would override it.
+    if (sheetDeclarationsFor(parent!).values.containsKey('text-align') ||
+        (_inlineCache[parent] ??
+                CssParser.parseInlineDeclarations(
+                  parent.attributes['style'] ?? '',
+                ))
+            .values
+            .containsKey('text-align')) {
+      return HtmlStyle.empty;
+    }
+    final align = (parent.attributes['align'] ?? '').toLowerCase();
     final value = switch (align) {
       'left' => TextAlign.left,
       'right' => TextAlign.right,

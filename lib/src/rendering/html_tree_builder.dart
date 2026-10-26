@@ -15,6 +15,7 @@ import 'element_registry.dart';
 import 'html_build_result.dart';
 import 'html_render_context.dart';
 import 'layout/equal_height_row.dart';
+import 'layout/negative_margin.dart';
 import 'layout/percent_boxes.dart';
 
 /// Walks the sanitized DOM and produces the Flutter widget tree.
@@ -135,7 +136,9 @@ class HtmlTreeBuilder {
         final normalBlock =
             style.display == CssDisplay.block &&
             style.float == null &&
-            _registry.handlerFor(node.localName ?? '') == null;
+            (_registry.handlerFor(node.localName ?? '') == null ||
+                node.localName == 'ul' ||
+                node.localName == 'ol');
         double edge(CssLength? value) =>
             (value?.resolve(
                       fontSize: style.resolvedFontSize,
@@ -1317,12 +1320,13 @@ class HtmlTreeBuilder {
     final fontSize = style.resolvedFontSize;
     final rootFontSize = _rootStyle.resolvedFontSize;
 
-    // Flutter's Container forbids negative margin/padding (a common email hack,
-    // e.g. `margin-left:-20px` to offset list padding). Clamp to zero rather
-    // than crash; the visual difference is minor.
-    final margin = _clampNonNegative(
-      style.margin?.resolve(fontSize: fontSize, rootFontSize: rootFontSize),
+    // Container accepts only non-negative insets. Apply negative horizontal
+    // margins outside it, where they can also affect the available line width.
+    final resolvedMargin = style.margin?.resolve(
+      fontSize: fontSize,
+      rootFontSize: rootFontSize,
     );
+    final margin = _clampNonNegative(resolvedMargin);
     final fixedPadding = _clampNonNegative(
       style.padding?.resolve(fontSize: fontSize, rootFontSize: rootFontSize),
     );
@@ -1581,6 +1585,13 @@ class HtmlTreeBuilder {
     if (style.visibilityHidden ?? false) {
       result = IgnorePointer(
         child: ExcludeSemantics(child: Opacity(opacity: 0, child: result)),
+      );
+    }
+    if ((resolvedMargin?.left ?? 0) < 0 || (resolvedMargin?.right ?? 0) < 0) {
+      result = NegativeHorizontalMargin(
+        left: (resolvedMargin?.left ?? 0).clamp(double.negativeInfinity, 0),
+        right: (resolvedMargin?.right ?? 0).clamp(double.negativeInfinity, 0),
+        child: result,
       );
     }
     return result;

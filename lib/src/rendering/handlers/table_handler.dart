@@ -251,7 +251,7 @@ class TableHandler extends HtmlElementHandler {
     // For the native path, compute the column layout up front so we know whether
     // any column flexes (fills the table width) — that decides how the table's
     // own width is applied below.
-    final parentInlineBlockCell = _parentIsAutoInlineBlockCell(table, context);
+    final parentInlineBlock = _parentIsAutoInlineBlock(table, context);
     final parentShrinkTable = _parentIsShrinkToFitTable(table, context);
     final layout = native
         ? _columnWidths(
@@ -259,7 +259,7 @@ class TableHandler extends HtmlElementHandler {
             columns,
             context,
             colSpecs,
-            shrink || parentInlineBlockCell || parentShrinkTable,
+            shrink || parentInlineBlock || parentShrinkTable,
             context.style.tableLayoutFixed ?? false,
             shrinkToFitButtonTable,
             shrinkToFitMaxWidth,
@@ -333,7 +333,7 @@ class TableHandler extends HtmlElementHandler {
     // single column stays at its intrinsic width (e.g. 112px) inside a 200px
     // `width:100%;max-width:200px` profile background.
     final hasPercentWidth = context.style.width?.unit == CssLengthUnit.percent;
-    if (hasPercentWidth && !inline && !shrink && !parentInlineBlockCell) {
+    if (hasPercentWidth && !inline && !shrink && !parentInlineBlock) {
       content = SizedBox(width: double.infinity, child: content);
     }
 
@@ -395,7 +395,7 @@ class TableHandler extends HtmlElementHandler {
     if (percentWidth != null &&
         !inline &&
         !shrink &&
-        !parentInlineBlockCell &&
+        !parentInlineBlock &&
         fixedWidth == null) {
       final fraction = percentWidthAllocated
           ? 1.0
@@ -446,13 +446,17 @@ class TableHandler extends HtmlElementHandler {
     return decorated;
   }
 
-  bool _parentIsAutoInlineBlockCell(
-    dom.Element table,
-    HtmlRenderContext context,
-  ) {
+  bool _parentIsAutoInlineBlock(dom.Element table, HtmlRenderContext context) {
     final parent = table.parent;
-    final tag = (parent?.localName ?? '').toLowerCase();
-    if (parent == null || (tag != 'td' && tag != 'th')) return false;
+    if (parent == null) return false;
+    final parentTag = parent.localName;
+    final tableWidth = context.style.width;
+    if (parentTag != 'td' &&
+        parentTag != 'th' &&
+        tableWidth != null &&
+        !tableWidth.isAuto) {
+      return false;
+    }
     final parentCtx = context.builder.contextFor(
       parent,
       context.childInherited,
@@ -1401,7 +1405,9 @@ class TableHandler extends HtmlElementHandler {
           intrinsicColumns) {
         // Shrink-to-fit: an inline-block cell, or a shrink-to-fit table, sizes
         // every such column to its content.
-        widths[col] = const IntrinsicColumnWidth();
+        widths[col] = intrinsicColumns && imageOnly && !hasFillImage
+            ? const _PreferredImageColumnWidth()
+            : const IntrinsicColumnWidth();
       } else if (!hasContent) {
         // An empty gutter/spacer column (no width, no content) must collapse to
         // its content (≈0) instead of claiming an equal flex share — otherwise
@@ -1838,7 +1844,10 @@ class TableHandler extends HtmlElementHandler {
       final spec = colspan == 1 && rowspan == 1 && i < columns.length
           ? columns[i]
           : null;
-      final fixed = _cellIsFixed(cellCtx, spec);
+      // A lone spanning cell occupies the entire row. Its authored width is
+      // a table sizing hint, not a cap on its final content box.
+      final fullRowSpan = singleCellRow && colspan > 1;
+      final fixed = !fullRowSpan && _cellIsFixed(cellCtx, spec);
       if (!fixed) hasFlexible = true;
       final wrapped = _wrapCellLink(decorated, cellEl, cellCtx);
       cells.add(
@@ -2834,6 +2843,21 @@ class _RenderSpanningTable extends RenderBox
   @override
   bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
       defaultHitTestChildren(result, position: position);
+}
+
+/// Replaced images contribute their preferred (possibly max-width capped)
+/// width before an adjacent text column is shrunk. Their render boxes report
+/// a zero min-intrinsic width to permit responsive scaling elsewhere.
+class _PreferredImageColumnWidth extends IntrinsicColumnWidth {
+  const _PreferredImageColumnWidth();
+
+  @override
+  double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    final preferred = maxIntrinsicWidth(cells, containerWidth);
+    return containerWidth.isFinite
+        ? preferred.clamp(0, containerWidth)
+        : preferred;
+  }
 }
 
 class _ShrinkToFitColumnWidth extends TableColumnWidth {

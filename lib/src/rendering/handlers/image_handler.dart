@@ -496,7 +496,18 @@ class _RenderMaxWidthFull extends RenderProxyBox {
     final natural = _naturalWidth;
     final w = (natural != null && width > natural) ? natural : width;
     if (_ratio > 0) return w / _ratio;
-    return child?.getMinIntrinsicHeight(w) ?? 0;
+    final height = child?.getMinIntrinsicHeight(w) ?? 0;
+    // Fixed-width pending images reserve a square during actual layout too.
+    // An enclosing IntrinsicHeight/Table must include the same provisional
+    // height, otherwise it constrains the real image row to zero until decode.
+    if (_reservePendingHeight &&
+        _naturalHeight == null &&
+        height <= 0 &&
+        w.isFinite &&
+        w > 0) {
+      return w;
+    }
+    return height;
   }
 
   @override
