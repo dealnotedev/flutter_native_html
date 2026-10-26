@@ -125,6 +125,7 @@ class ImageHandler extends HtmlElementHandler {
         naturalWidth: width == null ? null : width + padding.horizontal,
         naturalHeight: height == null ? null : height + padding.vertical,
         widthFactor: widthFactor,
+        reservePendingHeight: resolution.hasImage,
         child: child,
       );
     }
@@ -351,6 +352,7 @@ class _MaxWidthFull extends SingleChildRenderObjectWidget {
     required this.naturalWidth,
     required this.naturalHeight,
     this.widthFactor,
+    required this.reservePendingHeight,
     required Widget child,
   }) : super(child: child);
 
@@ -360,9 +362,17 @@ class _MaxWidthFull extends SingleChildRenderObjectWidget {
   final double? naturalHeight;
   final double? widthFactor;
 
+  /// A resolved provider may still decode later. An unavailable image has no
+  /// future intrinsic dimensions and must retain the fallback's actual height.
+  final bool reservePendingHeight;
+
   @override
-  RenderObject createRenderObject(BuildContext context) =>
-      _RenderMaxWidthFull(naturalWidth, naturalHeight, widthFactor);
+  RenderObject createRenderObject(BuildContext context) => _RenderMaxWidthFull(
+    naturalWidth,
+    naturalHeight,
+    widthFactor,
+    reservePendingHeight,
+  );
 
   @override
   void updateRenderObject(
@@ -372,7 +382,8 @@ class _MaxWidthFull extends SingleChildRenderObjectWidget {
     renderObject
       ..naturalWidth = naturalWidth
       ..naturalHeight = naturalHeight
-      ..widthFactor = widthFactor;
+      ..widthFactor = widthFactor
+      ..reservePendingHeight = reservePendingHeight;
   }
 }
 
@@ -381,11 +392,19 @@ class _RenderMaxWidthFull extends RenderProxyBox {
     this._naturalWidth,
     this._naturalHeight,
     this._widthFactor,
+    this._reservePendingHeight,
   );
 
   double? _naturalWidth;
   double? _naturalHeight;
   double? _widthFactor;
+  bool _reservePendingHeight;
+
+  set reservePendingHeight(bool value) {
+    if (value == _reservePendingHeight) return;
+    _reservePendingHeight = value;
+    markNeedsLayout();
+  }
 
   set naturalWidth(double? value) {
     if (value == _naturalWidth) return;
@@ -436,7 +455,10 @@ class _RenderMaxWidthFull extends RenderProxyBox {
     var height = _ratio > 0
         ? width / _ratio
         : (_naturalHeight ?? child?.getMaxIntrinsicHeight(width) ?? 0);
-    if (height <= 0 && width > 0) {
+    if (_reservePendingHeight &&
+        _naturalHeight == null &&
+        height <= 0 &&
+        width > 0) {
       // Before an image provider reports its intrinsic size, RenderImage can
       // answer 0 for intrinsic height. Keep percent/fixed-width images visible
       // instead of collapsing the whole email row to zero.
@@ -488,7 +510,7 @@ class _RenderMaxWidthFull extends RenderProxyBox {
         parentUsesSize: true,
       );
       var height = child?.size.height ?? 0;
-      if (height <= 0 && width > 0) {
+      if (_reservePendingHeight && height <= 0 && width > 0) {
         // Reserve a provisional square while an asynchronous provider has not
         // reported its intrinsic dimensions yet. Do not lay the child out
         // again with tight square constraints: that would make it a relayout

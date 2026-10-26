@@ -2844,8 +2844,17 @@ class _ShrinkToFitColumnWidth extends TableColumnWidth {
   }
 
   @override
-  double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) =>
-      _target(cells, containerWidth);
+  double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    // A surrounding table must be able to shrink a linked button down to its
+    // longest unbreakable content. Reporting the preferred (max-content)
+    // width here prevents adjacent buttons from sharing a narrow row.
+    var minimum = 0.0;
+    for (final cell in cells) {
+      final width = cell.getMinIntrinsicWidth(double.infinity);
+      if (width > minimum) minimum = width;
+    }
+    return minimum;
+  }
 
   @override
   double maxIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) =>
@@ -2958,7 +2967,15 @@ class _CellContentFacts {
     void visit(dom.Element element, HtmlRenderContext ctx) {
       if (ctx.style.display == CssDisplay.none) return;
       final width = ctx.style.width;
-      if (width != null && !width.isAuto && width.value > 0) hasContent = true;
+      // A percentage-width structural wrapper contributes no intrinsic
+      // content when all its descendants are hidden. Treating width:100% as
+      // content makes an otherwise empty column claim a flex share.
+      if (width != null &&
+          !width.isAuto &&
+          width.unit != CssLengthUnit.percent &&
+          width.value > 0) {
+        hasContent = true;
+      }
       if (element.localName == 'img') {
         sawImage = true;
         hasContent = true;
