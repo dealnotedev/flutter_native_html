@@ -164,6 +164,13 @@ class CssParser {
         value = value.replaceAll(_importantPattern, '').trim();
         if (value.isEmpty) continue;
       }
+      // Nonzero CSS widths require a unit. Ignore invalid declarations before
+      // replacing an earlier valid value; numeric HTML width attributes are
+      // parsed separately and must retain their legacy pixel semantics.
+      if (prop == 'width') {
+        final unitless = double.tryParse(value);
+        if (unitless != null && unitless != 0) continue;
+      }
       // Within one block, `!important` beats a later normal declaration of the
       // same property regardless of source order (`color:red!important;
       // color:blue` stays red), matching the cascade.

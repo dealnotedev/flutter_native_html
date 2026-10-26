@@ -30,6 +30,22 @@ class _Images extends HtmlImageResolver {
       HtmlImageResolution.image(src.endsWith('/logo') ? _logo : _square);
 }
 
+String _nestedImageTable(String image) =>
+    '''
+  <table width="100%" cellspacing="0" cellpadding="0" align="center" style="max-width:600px;margin:0 auto"><tr><td></td><td style="width:600px">
+    <table width="100%" cellspacing="0" cellpadding="0"><tr><td>
+      <table width="100%" cellspacing="0" cellpadding="0"><tr><td align="center" valign="top">
+        <table width="600" cellspacing="0" cellpadding="0" align="center"><tr><td align="center" valign="top">
+          <table width="100%" cellspacing="0" cellpadding="0" align="center"><tr>
+            <td height="1" style="height:1px;font-size:0;line-height:0">$image</td>
+          </tr></table>
+        </td></tr></table>
+      </td></tr></table>
+    </td></tr><tr><td height="20" colspan="3">&nbsp;</td></tr></table>
+    <img src="https://example.invalid/square" height="1">
+  </td><td></td></tr></table>
+''';
+
 Future<void> _pump(
   WidgetTester tester,
   String html, {
@@ -67,6 +83,185 @@ void main() {
     _logo = await _blankImage(360, 86);
     _square = await _blankImage(64, 64);
   });
+
+  testWidgets('nested table height contains a growing percentage-width image', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      _nestedImageTable(
+        '<img src="https://example.invalid/square" width="100%" style="display:block">',
+      ),
+    );
+    final image = tester.getRect(find.byType(Image).first);
+    expect(image.height, closeTo(600, 0.1));
+    expect(
+      tester.getRect(find.byType(HtmlEmailView)).bottom,
+      greaterThanOrEqualTo(image.bottom),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('nested percentage image height preserves a non-square aspect', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      _nestedImageTable(
+        '<img src="https://example.invalid/logo" width="50%" style="display:block">',
+      ),
+    );
+    final image = tester.getRect(find.byType(Image).first);
+    expect(image.width, closeTo(300, 0.1));
+    expect(image.height, closeTo(300 * 86 / 360, 0.1));
+    expect(
+      tester.getRect(find.byType(HtmlEmailView)).bottom,
+      greaterThanOrEqualTo(image.bottom),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('nested percentage image keeps an explicitly authored height', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      _nestedImageTable(
+        '<img src="https://example.invalid/square" width="100%" height="40" style="display:block">',
+      ),
+    );
+    final image = tester.getRect(find.byType(Image).first);
+    expect(image.height, 40);
+    expect(tester.getSize(find.byType(HtmlEmailView)).height, lessThan(100));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('nested percentage image height includes authored padding', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      _nestedImageTable(
+        '<img src="https://example.invalid/square" width="100%" style="display:block;padding:0 50px">',
+      ),
+    );
+    final image = tester.getRect(find.byType(Image).first);
+    expect(image.height, closeTo(500, 0.1));
+    expect(
+      tester.getRect(find.byType(HtmlEmailView)).bottom,
+      greaterThanOrEqualTo(image.bottom),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'a right-aligned badge stays visible beside a percentage column',
+    (tester) async {
+      await _pump(tester, '''
+      <table width="100%" cellpadding="0" cellspacing="0"><tr align="right">
+      <td style="width:100%">Heading</td><td>
+      <div style="display:inline-block;border:1px solid #000;margin-left:14px;max-width:200px">
+      <table width="100%" height="18" cellpadding="0" cellspacing="0"><tr>
+        <td style="border-radius:4px;font-size:0;height:18px;line-height:0;width:18px">
+          <img src="https://example.invalid/square" width="auto" height="18"
+               style="border-radius:4px;font-size:0;height:18px;line-height:0;width:18px">
+        </td>
+        <td style="font-size:12px;max-width:160px;overflow:hidden;padding:0 6px;text-overflow:ellipsis;white-space:nowrap">Example application</td>
+      </tr></table></div></td></tr></table>
+    ''');
+      expect(tester.getSize(find.byType(Image)), const Size(18, 18));
+      final image = tester.getRect(find.byType(Image));
+      final root = tester.getRect(find.byType(HtmlEmailView));
+      expect(image.right, lessThanOrEqualTo(root.right));
+      for (final clip
+          in find
+              .ancestor(of: find.byType(Image), matching: find.byType(ClipRect))
+              .evaluate()) {
+        final visible = tester
+            .getRect(find.byElementPredicate((e) => e == clip))
+            .intersect(image);
+        expect(visible.width, closeTo(image.width, 0.1));
+        expect(visible.height, closeTo(image.height, 0.1));
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('an invalid unitless CSS width keeps the earlier valid width', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      '<span style="display:inline-block;font-size:10px;width:40px;width:240">One</span>'
+      '<span style="display:inline-block;font-size:10px">Two</span>',
+    );
+    final first = tester.getTopLeft(find.text('One'));
+    final second = tester.getTopLeft(find.text('Two'));
+    expect(second.dx - first.dx, closeTo(40, 0.1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('numeric HTML width attributes still specify pixels', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      '<table width="120" cellpadding="0" cellspacing="0"><tr><td>'
+      '<img src="https://example.invalid/square" width="100%" style="display:block">'
+      '</td></tr></table>',
+    );
+    expect(tester.getSize(find.byType(Image)), const Size(120, 120));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('unitless zero remains a valid CSS width', (tester) async {
+    await _pump(
+      tester,
+      '<span style="display:inline-block;font-size:10px;width:40px;width:0">One</span>'
+      '<span style="display:inline-block;font-size:10px">Two</span>',
+    );
+    expect(
+      tester.getTopLeft(find.text('Two')).dx,
+      closeTo(tester.getTopLeft(find.text('One')).dx, 0.1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an empty gutter in a ragged table takes no flexible width', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      '<table width="100%" cellpadding="0" cellspacing="0">'
+      '<tr><td></td><td><img src="https://example.invalid/square" width="100%" style="display:block"></td></tr>'
+      '<tr><td></td></tr></table>',
+    );
+    final image = tester.getRect(find.byType(Image));
+    expect(image.width, closeTo(600, 0.1));
+    expect(image.left, tester.getRect(find.byType(HtmlEmailView)).left);
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final gutter in [
+    (attributes: 'style="padding:0 10px"', imageWidth: 580.0),
+    (attributes: 'width="30"', imageWidth: 570.0),
+  ]) {
+    testWidgets('an empty ragged-table gutter retains ${gutter.attributes}', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        '<table width="100%" cellpadding="0" cellspacing="0">'
+        '<tr><td ${gutter.attributes}></td><td><img src="https://example.invalid/square" width="100%" style="display:block"></td></tr>'
+        '<tr><td></td></tr></table>',
+      );
+      expect(
+        tester.getSize(find.byType(Image)).width,
+        closeTo(gutter.imageWidth, 0.1),
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   for (final spacing in [0, 2]) {
     testWidgets(

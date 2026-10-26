@@ -477,6 +477,22 @@ class _RenderMaxWidthFull extends RenderProxyBox {
 
   @override
   double computeMinIntrinsicHeight(double width) {
+    if (_widthFactor != null && width.isFinite) {
+      // A percentage width can enlarge the bitmap. RenderImage's intrinsic
+      // height alone never upscales it, but actual layout fixes the width and
+      // does. Use its natural aspect ratio so enclosing tables reserve the
+      // same height instead of clipping the enlarged image and following rows.
+      if (_naturalWidth == null && _naturalHeight != null) {
+        return _naturalHeight!;
+      }
+      final resolvedWidth = (width * _widthFactor!).clamp(0.0, width);
+      if (_ratio > 0) return resolvedWidth / _ratio;
+      final height = child
+          ?.getDryLayout(BoxConstraints.tightFor(width: resolvedWidth))
+          .height;
+      if (height != null && height > 0) return height;
+      if (_reservePendingHeight) return resolvedWidth;
+    }
     final natural = _naturalWidth;
     final w = (natural != null && width > natural) ? natural : width;
     if (_ratio > 0) return w / _ratio;

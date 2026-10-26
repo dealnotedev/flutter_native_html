@@ -1366,8 +1366,23 @@ class TableHandler extends HtmlElementHandler {
         // Flutter's max-intrinsic width for a WidgetSpan-based inline-block is
         // often the whole available cell width. Give CTA-only columns a small
         // flex share instead: they stay compact while remaining responsive.
-        hasFlex = true;
-        widths[col] = const FlexColumnWidth(0.5);
+        // A percentage sibling uses percentage-sized flex weights, however:
+        // 100 versus 0.5 leaves an inline badge only a few pixels wide. In
+        // that mixed case reserve its shrink-to-fit content before letting
+        // the percentage column absorb the remaining width.
+        final percentSibling = rowData.any(
+          (row) => row.cells.any(
+            (cell) =>
+                cell.ctx.style.width?.unit == CssLengthUnit.percent &&
+                cell.ctx.style.width!.value > 0,
+          ),
+        );
+        if (percentSibling) {
+          widths[col] = const _ShrinkToFitColumnWidth(null);
+        } else {
+          hasFlex = true;
+          widths[col] = const FlexColumnWidth(0.5);
+        }
       } else if (columns == 1 &&
           imageOnly &&
           hasImageOnlyCell &&
@@ -1998,6 +2013,10 @@ class TableHandler extends HtmlElementHandler {
     Widget child, [
     _ColSpec? column,
   ]) {
+    late final emptyContent = !_CellContentFacts.inspect(
+      cell,
+      cellCtx,
+    ).hasContent;
     // Prefer the shared column width so rows align (a fixed px column is sized
     // identically in every row, even where a cell omits its own width).
     if (column != null) {
@@ -2010,7 +2029,9 @@ class TableHandler extends HtmlElementHandler {
           child: child,
         );
       }
-      if (column.intrinsic) return IntrinsicWidth(child: child);
+      if (column.intrinsic || emptyContent) {
+        return IntrinsicWidth(child: child);
+      }
       return Expanded(child: child);
     }
     final colspan = int.tryParse(cell.attributes['colspan'] ?? '1') ?? 1;
@@ -2036,6 +2057,9 @@ class TableHandler extends HtmlElementHandler {
         );
       }
     }
+    // Match the native table path: an un-sized empty gutter contributes only
+    // its padding/border, not an equal share of the content column's width.
+    if (emptyContent) return IntrinsicWidth(child: child);
     return Expanded(flex: colspan.clamp(1, 1000), child: child);
   }
 
