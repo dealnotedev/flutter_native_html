@@ -664,8 +664,15 @@ class TableHandler extends HtmlElementHandler {
   ) {
     final cellPadding = _cellPaddingFor(table);
     final populatedRows = rowData.where((r) => r.cells.isNotEmpty).length;
-    final forcedRowHeight = resolvedPercentHeight != null && populatedRows > 0
-        ? resolvedPercentHeight / populatedRows
+    // A definite height also expands a single native row, so its backgrounds
+    // and valign fill the table (including empty one-pixel divider cells).
+    final tableHeight =
+        resolvedPercentHeight ??
+        (populatedRows == 1
+            ? _resolveHeightPx(context.style.height, context)
+            : null);
+    final forcedRowHeight = tableHeight != null && populatedRows > 0
+        ? tableHeight / populatedRows
         : null;
 
     final tableRows = <TableRow>[];
@@ -1049,25 +1056,22 @@ class TableHandler extends HtmlElementHandler {
       style.height ?? rowHeight,
       cell.ctx,
     );
-    final minHeight = forcedMinHeight == null
-        ? declaredHeight
-        : declaredHeight == null || forcedMinHeight > declaredHeight
-        ? forcedMinHeight
-        : declaredHeight;
-    if (minHeight != null) {
-      content = ConstrainedBox(
-        constraints: BoxConstraints(minHeight: minHeight),
-        // TableCell.middle only aligns this min-height box within the row. The
-        // authored content must also be aligned inside the box itself; without
-        // this a 56px image sits at the top of a `td height="118"`.
-        child: _alignVertically(
-          content,
-          effectiveVerticalAlign,
-          style.effectiveTextAlign,
-        ),
+    if (declaredHeight != null || forcedMinHeight != null) {
+      // TableCell.middle only aligns the cell box within the row. Its content
+      // must also be aligned inside the cell's own minimum-height box.
+      content = _alignVertically(
+        content,
+        effectiveVerticalAlign,
+        style.effectiveTextAlign,
       );
     }
-    final decorated = cell.ctx.builder.decorate(
+    if (declaredHeight != null) {
+      content = ConstrainedBox(
+        constraints: BoxConstraints(minHeight: declaredHeight),
+        child: content,
+      );
+    }
+    Widget decorated = cell.ctx.builder.decorate(
       content,
       HtmlStyle(
         // A normal table cell ignores margins. display:inline-block changes
@@ -1087,6 +1091,14 @@ class TableHandler extends HtmlElementHandler {
         overflowHidden: style.overflowHidden,
       ),
     );
+    if (forcedMinHeight != null) {
+      // The table allocates the whole cell box, including its padding/border;
+      // a cell's own declared height above still sizes its content box.
+      decorated = ConstrainedBox(
+        constraints: BoxConstraints(minHeight: forcedMinHeight),
+        child: decorated,
+      );
+    }
     return TableCell(
       verticalAlignment: _verticalAlignment(effectiveVerticalAlign),
       child: _wrapCellLink(decorated, cell.element, cell.ctx),
@@ -1457,16 +1469,21 @@ class TableHandler extends HtmlElementHandler {
       );
     }
     final fixedHeight = _resolveHeightPx(context.style.height, context);
-    // A one-row fallback table with a definite height must give that height to
-    // its row, not merely wrap the intrinsic row in a taller outer Container.
+    // A one-row fallback table with a definite height must give that minimum
+    // to its row, while allowing taller content to expand the table.
     // Otherwise bottom-aligned percentage children stop at the tallest child
     // and leave unused space above the table's bottom border (email charts are
     // commonly built from exactly this pattern).
     final Widget content;
     if (children.length == 1 && fixedHeight != null) {
-      content = SizedBox(
-        height: (fixedHeight - cellSpacing.v * 2).clamp(0.0, double.infinity),
-        child: children.single,
+      content = ConstrainedBox(
+        constraints: BoxConstraints(
+          minHeight: (fixedHeight - cellSpacing.v * 2).clamp(
+            0.0,
+            double.infinity,
+          ),
+        ),
+        child: IntrinsicHeight(child: children.single),
       );
     } else {
       content = Column(
@@ -2371,7 +2388,10 @@ class TableHandler extends HtmlElementHandler {
         // `width` is applied by _buildTable as a min-width floor (a CSS table
         // grows past its width to fit content), not a hard width here.
         maxWidth: style.maxWidth,
-        height: style.height,
+        // A table's height is a floor: its rows must still fit their content.
+        // A hard Container height collapses height="0" email sections while
+        // their children keep painting over the following rows.
+        minHeight: style.height,
         // Needed so a fixed-width table centers under an inherited
         // text-align:center (e.g. <td align="center">).
         textAlign: style.textAlign,

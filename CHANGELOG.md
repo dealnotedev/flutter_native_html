@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Treat table heights as minimums so zero-height email sections grow around
+  their content; preserve single-row vertical alignment and divider backgrounds.
 - Remove internal email collection and comparison utilities and agent notes
   from the public source tree.
 - Use English regression examples and replace personal details with synthetic

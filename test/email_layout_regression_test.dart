@@ -67,6 +67,103 @@ void main() {
     _logo = await _blankImage(360, 86);
     _square = await _blankImage(64, 64);
   });
+
+  for (final spacing in [0, 2]) {
+    testWidgets(
+      'single-row table height includes cell padding with cellspacing=$spacing',
+      (tester) async {
+        await _pump(tester, '''
+          <table height="120" width="100%" cellpadding="10" cellspacing="$spacing">
+            <tr><td valign="middle"><div style="height:20px;line-height:20px">Greeting</div></td></tr>
+          </table>
+          <div>Following section</div>
+        ''');
+        expect(
+          tester.getTopLeft(find.text('Following section')).dy,
+          closeTo(120, 0.1),
+        );
+        expect(
+          tester.getRect(find.text('Greeting')).center.dy,
+          closeTo(60, 0.1),
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+    for (final height in ['height="0"', 'style="height:1px"']) {
+      testWidgets(
+        'table $height with cellspacing=$spacing grows to fit its content',
+        (tester) async {
+          await _pump(tester, '''
+            <table $height width="100%" cellpadding="10" cellspacing="$spacing">
+              <tr><td valign="middle"><div style="height:60px">Greeting</div></td></tr>
+            </table>
+            <div>Following section</div>
+          ''');
+          expect(
+            tester.getTopLeft(find.text('Following section')).dy,
+            closeTo(80 + spacing * 2, 0.1),
+          );
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  testWidgets(
+    'one-pixel divider table gives its empty cells a painted height',
+    (tester) async {
+      await _pump(tester, '''
+      <table height="1" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td width="40%" style="background:#eeeeee"></td>
+        <td width="20%" style="background:#9147ff"></td>
+        <td width="40%" style="background:#eeeeee"></td>
+      </tr></table>
+    ''');
+      expect(find.byType(TableCell), findsNWidgets(3));
+      for (final cell in find.byType(TableCell).evaluate()) {
+        expect(tester.getSize(find.byWidget(cell.widget)).height, 1);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('nested zero-height email sections keep their document order', (
+    tester,
+  ) async {
+    await _pump(tester, '''
+      <table width="600" cellpadding="20" cellspacing="0"><tr><td>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr><td><table width="100%" height="90" cellpadding="0" cellspacing="0">
+            <tr><td align="center" valign="middle"><img src="https://example.test/logo" width="114" height="38"></td></tr>
+          </table></td></tr>
+          <tr><td><table width="100%" height="0" cellpadding="40" cellspacing="0">
+            <tr><td align="center" valign="middle"><div>New follower</div></td></tr>
+          </table></td></tr>
+          <tr><td><table width="100%" height="0" cellpadding="0" cellspacing="0">
+            <tr><td align="center" valign="middle">
+              <img src="https://example.test/avatar" width="96" height="96">
+              <div style="font-size:28px;margin:10px 0 30px">Follower name</div>
+            </td></tr>
+          </table></td></tr>
+          <tr><td><table width="100%" height="0" cellpadding="30" cellspacing="0">
+            <tr><td align="center" valign="middle"><a href="https://example.test/profile"
+              style="display:inline-block;line-height:40px;width:200px">View profile</a></td></tr>
+          </table></td></tr>
+        </table>
+      </td></tr><tr><td><p>Email footer</p></td></tr></table>
+    ''');
+    final greeting = tester.getRect(find.text('New follower'));
+    final avatar = tester.getRect(find.byType(Image).at(1));
+    final name = tester.getRect(find.text('Follower name'));
+    final button = tester.getRect(find.text('View profile'));
+    final footer = tester.getRect(find.text('Email footer'));
+    expect(avatar.top, greaterThanOrEqualTo(greeting.bottom + 40));
+    expect(name.top, greaterThanOrEqualTo(avatar.bottom + 10));
+    expect(button.top, greaterThanOrEqualTo(name.bottom + 60));
+    expect(footer.top, greaterThanOrEqualTo(button.bottom + 30));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('gradient and rounded nonuniform border keep their paint', (
     tester,
   ) async {
