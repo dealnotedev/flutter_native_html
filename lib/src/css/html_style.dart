@@ -11,6 +11,7 @@ enum CssDisplay {
   inline,
   block,
   inlineBlock,
+  flex,
   listItem,
   table,
   tableRowGroup,
@@ -176,6 +177,8 @@ class HtmlStyle {
     this.textDirection,
     this.anchorColor,
     this.display,
+    this.alignItems,
+    this.justifyContent,
     this.margin,
     this.padding,
     this.borders,
@@ -249,6 +252,8 @@ class HtmlStyle {
   // separate from CSS text-align so it does not leak into nested table cells.
   final TextAlign? cellTextAlign;
   final CssDisplay? display;
+  final CrossAxisAlignment? alignItems;
+  final MainAxisAlignment? justifyContent;
   final CssEdges? margin;
   final CssEdges? padding;
   final CssBorders? borders;
@@ -373,6 +378,8 @@ class HtmlStyle {
       textDirection: other.textDirection ?? textDirection,
       anchorColor: other.anchorColor ?? anchorColor,
       display: other.display ?? display,
+      alignItems: other.alignItems ?? alignItems,
+      justifyContent: other.justifyContent ?? justifyContent,
       margin: margin?.merge(other.margin) ?? other.margin,
       padding: padding?.merge(other.padding) ?? other.padding,
       borders: borders?.merge(other.borders) ?? other.borders,

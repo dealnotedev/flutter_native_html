@@ -248,6 +248,19 @@ class TableHandler extends HtmlElementHandler {
         cellSpacing.v == 0 &&
         !hasStack &&
         !wrapsInlineCells;
+    // Flat auto-width rows (for example an icon followed by a label) keep
+    // their natural column widths. Structural wrappers with nested tables
+    // still need the containing width to resolve responsive descendants.
+    final naturalAutoWidth =
+        native &&
+        noWidth &&
+        noMaxWidth &&
+        columns > 1 &&
+        rowData.every(
+          (row) => row.cells.every(
+            (cell) => cell.element.querySelector('table') == null,
+          ),
+        );
     // For the native path, compute the column layout up front so we know whether
     // any column flexes (fills the table width) — that decides how the table's
     // own width is applied below.
@@ -259,7 +272,10 @@ class TableHandler extends HtmlElementHandler {
             columns,
             context,
             colSpecs,
-            shrink || parentInlineBlock || parentShrinkTable,
+            shrink ||
+                parentInlineBlock ||
+                parentShrinkTable ||
+                naturalAutoWidth,
             context.style.tableLayoutFixed ?? false,
             shrinkToFitButtonTable,
             shrinkToFitMaxWidth,
@@ -423,7 +439,8 @@ class TableHandler extends HtmlElementHandler {
       );
     }
 
-    final needsAlign = !inline && (shrink || fixedWidth != null);
+    final needsAlign =
+        !inline && (shrink || fixedWidth != null || naturalAutoWidth);
     if (needsAlign) {
       final alignment =
           tableAlign == 'right' ||

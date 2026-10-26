@@ -51,6 +51,8 @@ class CssDeclarationMapper {
     TextAlign? textAlign;
     CssTextTransform? textTransform;
     CssDisplay? display;
+    CrossAxisAlignment? alignItems;
+    MainAxisAlignment? justifyContent;
     CssEdges? margin;
     CssEdges? padding;
     CssBorders? borders;
@@ -255,6 +257,27 @@ class CssDeclarationMapper {
           break;
         case 'display':
           display = _display(value) ?? display;
+          break;
+        case 'align-items':
+          alignItems = switch (value.trim().toLowerCase()) {
+            'center' => CrossAxisAlignment.center,
+            'start' || 'flex-start' => CrossAxisAlignment.start,
+            'end' || 'flex-end' => CrossAxisAlignment.end,
+            'stretch' => CrossAxisAlignment.stretch,
+            'baseline' => CrossAxisAlignment.baseline,
+            _ => alignItems,
+          };
+          break;
+        case 'justify-content':
+          justifyContent = switch (value.trim().toLowerCase()) {
+            'center' => MainAxisAlignment.center,
+            'start' || 'flex-start' => MainAxisAlignment.start,
+            'end' || 'flex-end' => MainAxisAlignment.end,
+            'space-between' => MainAxisAlignment.spaceBetween,
+            'space-around' => MainAxisAlignment.spaceAround,
+            'space-evenly' => MainAxisAlignment.spaceEvenly,
+            _ => justifyContent,
+          };
           break;
         case 'visibility':
           final visibility = value.trim().toLowerCase();
@@ -545,6 +568,8 @@ class CssDeclarationMapper {
       textAlign: textAlign,
       textTransform: textTransform,
       display: display,
+      alignItems: alignItems,
+      justifyContent: justifyContent,
       margin: margin,
       padding: padding,
       borders: borders,
@@ -704,6 +729,8 @@ class CssDeclarationMapper {
         return CssDisplay.inlineBlock;
       case 'block':
         return CssDisplay.block;
+      case 'flex':
+        return CssDisplay.flex;
       case 'list-item':
         return CssDisplay.listItem;
       case 'table':

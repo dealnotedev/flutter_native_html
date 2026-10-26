@@ -566,6 +566,8 @@ class HtmlTreeBuilder {
     switch (ctx.style.display ?? CssDisplay.inline) {
       case CssDisplay.none:
         return const [];
+      case CssDisplay.flex:
+        return [BlockResult(_buildFlexRow(element, ctx))];
       case CssDisplay.inline:
         // Keep the first traversal even when this inline wrapper contains a
         // block/column. Rebuilding on fallback doubles work at every level.
@@ -593,7 +595,29 @@ class HtmlTreeBuilder {
             ),
           ];
         }
-        return [InlineResult(_inlineFromResults(children, ctx))];
+        final span = _inlineFromResults(children, ctx);
+        final padding = ctx.style.padding?.resolve(
+          fontSize: ctx.style.resolvedFontSize,
+          rootFontSize: _rootStyle.resolvedFontSize,
+        );
+        if (padding == null || (padding.left <= 0 && padding.right <= 0)) {
+          return [InlineResult(span)];
+        }
+        // Plain inline padding does not make its text atomic. Horizontal
+        // edges occupy inline space; vertical edges do not enlarge the line.
+        return [
+          InlineResult(
+            TextSpan(
+              children: [
+                if (padding.left > 0)
+                  WidgetSpan(child: SizedBox(width: padding.left, height: 0)),
+                span,
+                if (padding.right > 0)
+                  WidgetSpan(child: SizedBox(width: padding.right, height: 0)),
+              ],
+            ),
+          ),
+        ];
       case CssDisplay.inlineBlock:
         // Flows inline but keeps its box (width/height/padding/background).
         final results = buildChildNodes(element, ctx.childInherited);
@@ -635,6 +659,40 @@ class HtmlTreeBuilder {
       case CssDisplay.table:
         return [BlockResult(_buildAnonymousCssTable(element, ctx))];
     }
+  }
+
+  /// Email icon/text flex rows. Auto-width items keep their preferred width
+  /// when it fits, but can wrap within the space left by fixed-width icons.
+  Widget _buildFlexRow(dom.Element element, HtmlRenderContext ctx) {
+    final children = <Widget>[];
+    for (final node in element.nodes) {
+      if (node is dom.Comment || node is dom.Text && node.text.trim().isEmpty) {
+        continue;
+      }
+      final itemCtx = node is dom.Element
+          ? contextFor(node, ctx.childInherited)
+          : ctx;
+      if (itemCtx.style.display == CssDisplay.none) continue;
+      final results = _buildNode(node, ctx.childInherited);
+      if (results.isEmpty) continue;
+      final item = IntrinsicWidth(child: flow(results, itemCtx.style));
+      final width = node is dom.Element ? itemCtx.style.width : null;
+      final fixed =
+          width != null && !width.isAuto && width.unit != CssLengthUnit.percent;
+      children.add(fixed ? item : Flexible(fit: FlexFit.loose, child: item));
+    }
+    final cross = ctx.style.alignItems ?? CrossAxisAlignment.stretch;
+    Widget row = Row(
+      mainAxisAlignment: ctx.style.justifyContent ?? MainAxisAlignment.start,
+      crossAxisAlignment: cross,
+      textBaseline: cross == CrossAxisAlignment.baseline
+          ? TextBaseline.alphabetic
+          : null,
+      textDirection: ctx.style.textDirection,
+      children: children,
+    );
+    if (cross == CrossAxisAlignment.stretch) row = IntrinsicHeight(child: row);
+    return decorate(row, ctx.style);
   }
 
   /// CSS email builders often use `display:table` on a `<div>` with
@@ -1169,9 +1227,8 @@ class HtmlTreeBuilder {
 
   /// Whether a nominally-inline element needs a real box instead of a
   /// [TextSpan]. TextSpan can carry text styling and a square background, but
-  /// not CSS box layout. Email CTAs commonly put the horizontal padding on an
-  /// inline `<span>` inside an inline-block link; if we keep that span as text,
-  /// the button collapses to the label width.
+  /// not CSS box decoration. Plain fixed padding is represented by inline
+  /// spacers so that the text can still wrap between words.
   bool _inlineNeedsBox(HtmlStyle style) {
     final fontSize = style.resolvedFontSize;
     final rootFontSize = _rootStyle.resolvedFontSize;
@@ -1215,7 +1272,10 @@ class HtmlTreeBuilder {
         style.borderRadiusPercent != null ||
         style.borderRadiusGeometry != null;
 
-    return hasPadding ||
+    return (hasPadding &&
+            (style.preventsWrapping ||
+                style.backgroundColor != null ||
+                hasPercentEdge(style.padding))) ||
         hasMargin ||
         hasBorder ||
         style.backgroundImage != null ||

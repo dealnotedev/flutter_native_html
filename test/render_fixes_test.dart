@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_native_html/flutter_native_html.dart';
 import 'package:flutter_native_html/src/rendering/css_border_decoration.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1035,8 +1036,16 @@ void main() {
                   const Color(0xff735aff);
         });
 
+    final paragraph = tester.renderObject<RenderParagraph>(
+      find.byWidget(label),
+    );
+    final start = paragraph.text.toPlainText().indexOf('Review Document');
+    final ink = paragraph.getBoxesForSelection(
+      TextSelection(baseOffset: start, extentOffset: start + 15),
+    );
+    expect(ink, hasLength(1));
     expect(
-      tester.getSize(button).width - tester.getSize(find.byWidget(label)).width,
+      tester.getSize(button).width - ink.single.toRect().width,
       greaterThan(44),
     );
     expect(tester.getSize(button).height, closeTo(44, 1));

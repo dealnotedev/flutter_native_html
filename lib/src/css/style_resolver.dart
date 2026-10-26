@@ -394,7 +394,19 @@ class StyleResolver {
     }
 
     final valign = attrs['valign'];
-    if (valign != null) verticalAlign = valign.toLowerCase();
+    if (valign != null &&
+        const {
+          'td',
+          'th',
+          'tr',
+          'thead',
+          'tbody',
+          'tfoot',
+          'col',
+          'colgroup',
+        }.contains(tag)) {
+      verticalAlign = valign.toLowerCase();
+    }
 
     final bgcolor = attrs['bgcolor'];
     if (bgcolor != null) backgroundColor = _legacyAttrColor(bgcolor);
