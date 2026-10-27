@@ -445,9 +445,28 @@ class HtmlStyle {
     // Family names are opaque: "sans-serif-Bold" is not a generic family,
     // and a fallback containing "Bold" cannot override CSS font-weight.
     // Exhausted CSS family lists fall back to the browser's default serif,
-    // rather than the ambient Flutter UI font. Desktop engines need concrete
-    // names for CSS generics; Android/iOS already provide generic aliases.
-    String generic(String family) => switch ((defaultTargetPlatform, family)) {
+    // rather than the ambient Flutter UI font. CoreText does not resolve CSS
+    // generics/browser aliases. Leaving them unresolved lets the explicit emoji
+    // fallback supply spaces and digits before platform text fallback, giving
+    // those glyphs much wider advances than the surrounding text on iOS.
+    final platform = defaultTargetPlatform;
+    final apple =
+        platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
+    String systemFont() => switch (platform) {
+      TargetPlatform.iOS || TargetPlatform.macOS =>
+        resolvedFontSize < 20
+            ? 'CupertinoSystemText'
+            : 'CupertinoSystemDisplay',
+      TargetPlatform.windows => 'Segoe UI',
+      TargetPlatform.linux => 'DejaVu Sans',
+      TargetPlatform.android || TargetPlatform.fuchsia => 'Roboto',
+    };
+    String generic(String family) => switch ((platform, family)) {
+      (_, 'system-ui' || '-apple-system' || 'blinkmacsystemfont') =>
+        systemFont(),
+      (_, 'serif') when apple => 'Times New Roman',
+      (_, 'sans-serif') when apple => 'Helvetica',
+      (_, 'monospace') when apple => 'Courier',
       (TargetPlatform.windows, 'serif') => 'Times New Roman',
       (TargetPlatform.windows, 'sans-serif') => 'Arial',
       (TargetPlatform.windows, 'monospace') => 'Courier New',
@@ -456,19 +475,24 @@ class HtmlStyle {
       (TargetPlatform.linux, 'monospace') => 'DejaVu Sans Mono',
       _ => family,
     };
+    const systemAliases = {'system-ui', '-apple-system', 'blinkmacsystemfont'};
     const generics = {
       'serif',
       'sans-serif',
       'monospace',
       'cursive',
       'fantasy',
-      'system-ui',
+      ...systemAliases,
     };
     return [
-      for (final family in families)
+      for (final family in families) ...[
         generics.contains(family.toLowerCase())
             ? generic(family.toLowerCase())
             : family,
+        // Keep a concrete text fallback even when a system-font proxy is not
+        // available in the embedder. Emoji must never supply Latin spacing.
+        if (apple && systemAliases.contains(family.toLowerCase())) 'Helvetica',
+      ],
       if (!families.any((family) => generics.contains(family.toLowerCase())))
         generic('serif'),
       // Keep color glyph fallback available after an explicit CSS family list.
