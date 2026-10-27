@@ -190,8 +190,8 @@ class TableHandler extends HtmlElementHandler {
         rowData.every((r) => r.cells.length == columns) &&
         rowData.every((r) => r.cells.every((c) => !c.hasSpan));
 
-    // A responsive email stacks columns on mobile by making every cell a
-    // full-width block (`th{display:inline-block;width:100%}` under @media).
+    // Responsive emails stack cells with display:block (even at a fixed
+    // width), or with full-width inline-blocks under @media.
     // Such rows can't be a grid — render them as a vertical stack (fallback).
     final hasStack = rowData.any(_rowStacks);
     // `display:inline-block` cells leave the table-column grid and wrap like
@@ -1735,8 +1735,8 @@ class TableHandler extends HtmlElementHandler {
     );
   }
 
-  /// Renders a "stacked" row: every cell is a full-width block, one under the
-  /// other (responsive `th{display:inline-block;width:100%}` on mobile).
+  /// Renders a stacked row, preserving fixed widths on block cells while
+  /// filling the row for full-width blocks/inline-blocks.
   Widget _buildStackedRow(dom.Element tr, HtmlRenderContext context) {
     final children = <Widget>[];
     for (final cellEl in _cellsOf(tr, context)) {
@@ -1762,13 +1762,12 @@ class TableHandler extends HtmlElementHandler {
     );
   }
 
-  /// Whether a `<tr>` should stack (≥2 cells, each a full-width block/inline-
-  /// block) — the responsive column-stacking pattern.
+  /// Whether a `<tr>` should stack (≥2 block cells/full-width inline-blocks).
   bool _stacksTr(dom.Element tr, HtmlRenderContext context) {
     final cells = _cellsOf(tr, context);
     if (cells.length < 2) return false;
     return cells.every(
-      (cellEl) => _fullWidthBlock(
+      (cellEl) => _stacksCell(
         context.builder.contextForDescendant(cellEl, context).style,
       ),
     );
@@ -1782,9 +1781,15 @@ class TableHandler extends HtmlElementHandler {
     return full && blockish;
   }
 
+  // A block starts a new line independently of its width. Requiring 100%
+  // here keeps fixed-width mobile cells in the desktop grid and squeezes the
+  // neighbouring text (e.g. an email footer's 250px store-badge block).
+  static bool _stacksCell(HtmlStyle s) =>
+      s.display == CssDisplay.block || _fullWidthBlock(s);
+
   bool _rowStacks(_RowData row) {
     if (row.cells.length < 2) return false;
-    return row.cells.every((c) => _fullWidthBlock(c.ctx.style));
+    return row.cells.every((c) => _stacksCell(c.ctx.style));
   }
 
   Widget _buildRowFallback(
