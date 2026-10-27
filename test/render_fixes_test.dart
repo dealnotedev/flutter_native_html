@@ -4192,6 +4192,8 @@ void main() {
     expect(axis, isNotNull);
     expect(bars, isNotEmpty);
     for (final bar in bars) {
+      expect(bar.width, greaterThan(0));
+      expect(bar.height, greaterThan(0));
       expect(bar.bottom, closeTo(axis!.bottom - 2, 0.01));
     }
   });

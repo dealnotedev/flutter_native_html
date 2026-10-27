@@ -3029,8 +3029,23 @@ class _CellContentFacts {
     var meaningfulChildren = 0;
     var inlineBlockChild = false;
 
-    void visit(dom.Element element, HtmlRenderContext ctx) {
+    void visit(
+      dom.Element element,
+      HtmlRenderContext ctx, {
+      bool sizedHeight = false,
+    }) {
       if (ctx.style.display == CssDisplay.none) return;
+      final height = ctx.style.height;
+      if (height != null && !height.isAuto) sizedHeight = height.value > 0;
+      // A sized, painted box is content even without text or images. Email
+      // charts use percentage-height tables ending in empty coloured cells;
+      // treating those cells as gutters collapses every bar to zero width.
+      if (sizedHeight &&
+          ((ctx.style.backgroundColor?.a ?? 0) > 0 ||
+              ctx.style.backgroundImage != null)) {
+        hasContent = true;
+        onlyImages = false;
+      }
       final width = ctx.style.width;
       // A percentage-width structural wrapper contributes no intrinsic
       // content when all its descendants are hidden. Treating width:100% as
@@ -3066,7 +3081,7 @@ class _CellContentFacts {
             meaningfulChildren++;
             inlineBlockChild = child.style.display == CssDisplay.inlineBlock;
           }
-          visit(node, child);
+          visit(node, child, sizedHeight: sizedHeight);
         }
       }
     }
