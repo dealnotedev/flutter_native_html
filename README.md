@@ -45,6 +45,48 @@ Untrusted inputs are bounded by `maxHtmlCharacters`, `maxDomNodes`,
 `maxCssCharacters`, and `maxCssRules`. The default resolver also caps encoded
 payloads and decoded image dimensions.
 
+### Estimate spacing already inside a document
+
+```dart
+final document = HtmlEmailParser().parse(emailBody);
+final existing = estimateHtmlDocumentInsets(
+  document,
+  availableWidth: 360, // the same width the HTML renderer will receive
+  config: const HtmlRenderConfig(baseFontSize: 16),
+);
+
+// Separate, nullable values in layout logical pixels:
+print(existing.left);
+print(existing.top);
+print(existing.right);
+print(existing.bottom);
+final EdgeInsets? allSides = existing.insets;
+
+// Reuse the same prepared document for rendering.
+HtmlEmailView.document(
+  document: document,
+  config: const HtmlRenderConfig(baseFontSize: 16),
+);
+```
+
+This estimates **existing** space, not recommended extra margins. The host owns
+its minimum-gutter policy. Zero means no estimated inset; `null` means that the
+side needs actual layout or image/text measurement, so it must not silently be
+treated as a measured zero. Empty documents set `hasContent` to false.
+
+The estimator reuses the renderer's CSS cascade and width-based media queries.
+It accumulates nested block/single-column table spacing, includes `cellpadding`
+and `cellspacing`, and does not mistake a button's local padding for a document
+gutter. Short text is considered within its available line box; unused space
+after the last word is not an authored right margin.
+
+Estimates exclude host padding, safe areas, background paint, glyph/bitmap ink
+bounds and the `fitToWidth` paint scale. Images, multi-column/spanning tables,
+inline boxes, fractional widths, constrained heights, floats and custom handlers
+can leave sides unknown. This function does not build widgets, fetch resources,
+mutate the parsed document, or change rendering defaults. Recompute when the
+document, available width or base font size changes.
+
 ## Architecture
 
 A linear pipeline, each stage isolated and replaceable:

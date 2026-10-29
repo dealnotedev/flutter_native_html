@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `estimateHtmlDocumentInsets` for per-side estimates of existing document
+  spacing using the CSS cascade and media-query width. Report unmeasurable sides
+  as unknown instead of inventing zeroes; leave rendering and host margin policy
+  unchanged.
 - Render literal `var()` color fallbacks in email design tokens, keep Helvetica
   text sans-serif on other platforms, and preserve table cell backgrounds and
   borders across the full row height. Honor individual shorthand corner radii.
