@@ -1341,7 +1341,13 @@ class TableHandler extends HtmlElementHandler {
         // A cell whose width merely equals the table is a genuine fixed cell —
         // it keeps MaxColumnWidth below so the column grows to fit content +
         // padding (e.g. a 20px icon in a 20px-wide cell with padding).
-        if (hasContent) hasFlex = true;
+        if (hasContent) {
+          hasFlex = true;
+          // This column fills the percentage remainder just like an auto
+          // content column. Keeping a weight of 1 beside two 5% gutters would
+          // give the content only 1/11 of the row on a narrow viewport.
+          remainderColumns.add(col);
+        }
         widths[col] = hasContent
             ? const FlexColumnWidth(1)
             : const IntrinsicColumnWidth();
