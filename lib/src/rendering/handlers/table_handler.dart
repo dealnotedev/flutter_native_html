@@ -1077,15 +1077,14 @@ class TableHandler extends HtmlElementHandler {
       style.height ?? rowHeight,
       cell.ctx,
     );
-    if (declaredHeight != null || forcedMinHeight != null) {
-      // TableCell.middle only aligns the cell box within the row. Its content
-      // must also be aligned inside the cell's own minimum-height box.
-      content = _alignVertically(
-        content,
-        effectiveVerticalAlign,
-        style.effectiveTextAlign,
-      );
-    }
+    // Stretch the decorated box to the whole row, then align its content.
+    // Aligning only the cell box leaves gaps in backgrounds and side borders
+    // whenever a neighbouring cell is taller (for example a plan comparison).
+    content = _alignVertically(
+      SizedBox(width: double.infinity, child: content),
+      effectiveVerticalAlign,
+      style.effectiveTextAlign,
+    );
     if (declaredHeight != null) {
       content = ConstrainedBox(
         constraints: BoxConstraints(minHeight: declaredHeight),
@@ -1121,7 +1120,7 @@ class TableHandler extends HtmlElementHandler {
       );
     }
     return TableCell(
-      verticalAlignment: _verticalAlignment(effectiveVerticalAlign),
+      verticalAlignment: TableCellVerticalAlignment.intrinsicHeight,
       child: _wrapCellLink(decorated, cell.element, cell.ctx),
     );
   }
@@ -2237,20 +2236,6 @@ class TableHandler extends HtmlElementHandler {
                 CssDisplay.none)
           node,
     ];
-  }
-
-  TableCellVerticalAlignment _verticalAlignment(String? valign) {
-    switch (valign) {
-      case 'top':
-        return TableCellVerticalAlignment.top;
-      case 'bottom':
-        return TableCellVerticalAlignment.bottom;
-      // Cells without an explicit valign are centered vertically (matches how
-      // email clients render mixed-height rows, e.g. a short divider next to
-      // padded text cells).
-      default:
-        return TableCellVerticalAlignment.middle;
-    }
   }
 
   Widget _alignVertically(

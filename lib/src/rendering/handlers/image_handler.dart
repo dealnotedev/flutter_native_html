@@ -294,6 +294,10 @@ class ImageHandler extends HtmlElementHandler {
   }
 
   Widget _clip(Widget child, HtmlStyle style) {
+    final corners = style.borderRadiusGeometry;
+    if (corners != null) {
+      return ClipRRect(borderRadius: corners, child: child);
+    }
     // A percent radius >= 50% means a full circle/ellipse; smaller percents and
     // px radii become rounded corners.
     final percent = style.borderRadiusPercent;

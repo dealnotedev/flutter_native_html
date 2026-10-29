@@ -1398,14 +1398,19 @@ void main() {
         '</tr></tbody></table>',
       ),
     );
-    final cells = tester.widgetList<TableCell>(find.byType(TableCell));
-    expect(cells, isNotEmpty);
-    expect(
-      cells.every(
-        (c) => c.verticalAlignment == TableCellVerticalAlignment.middle,
-      ),
-      isTrue,
-    );
+    final divider = tester
+        .widgetList<Container>(find.byType(Container))
+        .firstWhere(
+          (w) =>
+              w.decoration is BoxDecoration &&
+              (w.decoration as BoxDecoration).color == const Color(0xff000000),
+        );
+    final dividerRect = tester.getRect(find.byWidget(divider));
+    final contacts = tester.getRect(find.text('CONTACTS'));
+    final support = tester.getRect(find.text('SUPPORT'));
+    expect(dividerRect.center.dy, closeTo(contacts.center.dy, 0.01));
+    expect(dividerRect.center.dy, closeTo(support.center.dy, 0.01));
+    expect(dividerRect.height, 16);
   });
 
   testWidgets('negative margin is clamped instead of crashing', (tester) async {

@@ -6,6 +6,31 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   tearDown(() => debugDefaultTargetPlatformOverride = null);
 
+  for (final (platform, fallback) in [
+    (TargetPlatform.windows, 'Arial'),
+    (TargetPlatform.android, 'sans-serif'),
+    (TargetPlatform.linux, 'DejaVu Sans'),
+  ]) {
+    test('$platform Helvetica retains a sans-serif text fallback', () {
+      debugDefaultTargetPlatformOverride = platform;
+      final style = const HtmlStyle(fontFamilies: ['Helvetica']).toTextStyle();
+      expect(style.fontFamily, 'Helvetica');
+      expect(style.fontFamilyFallback!.first, fallback);
+    });
+  }
+
+  test(
+    'Windows preserves the default fallback for other named font families',
+    () {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      final style = const HtmlStyle(
+        fontFamilies: ['Helvetica Neue'],
+      ).toTextStyle();
+      expect(style.fontFamily, 'Helvetica Neue');
+      expect(style.fontFamilyFallback!.first, 'Times New Roman');
+    },
+  );
+
   for (final platform in [TargetPlatform.iOS, TargetPlatform.macOS]) {
     for (final alias in ['-apple-system', 'BlinkMacSystemFont', 'system-ui']) {
       for (final size in [17.0, 20.0, 24.0]) {

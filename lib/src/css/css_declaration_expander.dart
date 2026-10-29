@@ -4,6 +4,30 @@ class CssDeclarationExpander {
   const CssDeclarationExpander._();
 
   static Map<String, String> expand(String property, String value) {
+    if (property == 'border-radius') {
+      final tokens = _tokens(value);
+      if (tokens.length == 1 && _length.hasMatch(tokens.single)) {
+        // Keep the uniform/percentage representation, while resetting corner
+        // longhands from an earlier, lower-priority multi-value shorthand.
+        return {
+          property: value,
+          for (final corner in _corners) 'border-$corner-radius': 'initial',
+        };
+      }
+      // Preserve percentage radii for the box-size-aware uniform path. Expand
+      // absolute corner radii before the cascade so longhands retain priority.
+      if (tokens.every(
+        (token) => _length.hasMatch(token) && !token.endsWith('%'),
+      )) {
+        final radii = _four(tokens);
+        if (radii != null) {
+          return {
+            for (var i = 0; i < _corners.length; i++)
+              'border-${_corners[i]}-radius': radii[i],
+          };
+        }
+      }
+    }
     final side = property.startsWith('border-')
         ? property.substring('border-'.length)
         : '';
@@ -57,6 +81,12 @@ class CssDeclarationExpander {
   }
 
   static const _sides = ['top', 'right', 'bottom', 'left'];
+  static const _corners = [
+    'top-left',
+    'top-right',
+    'bottom-right',
+    'bottom-left',
+  ];
   static const _borderStyles = {
     'none',
     'hidden',

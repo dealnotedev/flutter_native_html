@@ -4,14 +4,36 @@ import 'dart:ui';
 ///
 /// Supports the forms common in email HTML: `#rgb`, `#rrggbb`, `#rrggbbaa`,
 /// `rgb()/rgba()`, `hsl()/hsla()`, the `transparent` keyword and the standard
-/// named colors. Returns `null` for anything it does not understand so the
+/// named colors, including literal fallbacks for unresolved `var()` tokens.
+/// Returns `null` for anything it does not understand so the
 /// caller can fall back to inheritance.
 class CssColor {
   const CssColor._();
 
   static Color? tryParse(String? raw) {
     if (raw == null) return null;
-    final value = raw.trim().toLowerCase();
+    var value = raw.trim().toLowerCase();
+    // Email design systems often export a custom-property reference with a
+    // literal fallback but no variable definition. Keep that fallback even
+    // though this renderer does not evaluate custom-property declarations.
+    for (var nesting = 0; value.startsWith('var('); nesting++) {
+      if (nesting >= 32 || !value.endsWith(')')) return null;
+      var depth = 0;
+      int? comma;
+      for (var i = 4; i < value.length - 1; i++) {
+        final ch = value[i];
+        if (ch == '(') depth++;
+        if (ch == ')') {
+          if (depth == 0) return null;
+          depth--;
+        }
+        if (ch == ',' && depth == 0 && comma == null) comma = i;
+      }
+      if (depth != 0 || comma == null) return null;
+      final name = value.substring(4, comma).trim();
+      if (!RegExp(r'^--[\w-]+$').hasMatch(name)) return null;
+      value = value.substring(comma + 1, value.length - 1).trim();
+    }
     if (value.isEmpty) return null;
 
     if (value == 'transparent') return const Color(0x00000000);

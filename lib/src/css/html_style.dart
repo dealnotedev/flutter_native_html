@@ -492,6 +492,11 @@ class HtmlStyle {
         // Keep a concrete text fallback even when a system-font proxy is not
         // available in the embedder. Emoji must never supply Latin spacing.
         if (apple && systemAliases.contains(family.toLowerCase())) 'Helvetica',
+        // Helvetica is commonly the only family on email headings. Platforms
+        // without it need a metrically similar sans face before the default
+        // serif/emoji fallback, while an installed custom font still wins.
+        if (!apple && family.toLowerCase() == 'helvetica')
+          generic('sans-serif'),
       ],
       if (!families.any((family) => generics.contains(family.toLowerCase())))
         generic('serif'),

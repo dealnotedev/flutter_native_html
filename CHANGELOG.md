@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Render literal `var()` color fallbacks in email design tokens, keep Helvetica
+  text sans-serif on other platforms, and preserve table cell backgrounds and
+  borders across the full row height. Honor individual shorthand corner radii.
 - Separate the demo app into `example/` so the renderer no longer depends on
   `file_picker` or `desktop_drop`.
 - Treat table heights as minimums so zero-height email sections grow around
