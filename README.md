@@ -32,8 +32,8 @@ HtmlEmailView(
 ```
 
 Place it inside a width-bounded parent (e.g. `ListView`/`Padding`); it sizes its
-height to content. Run the demo with `flutter run` to browse sample emails, or
-open a real `.eml`/`.html` file from disk (📂 in the app bar) — `.eml` files are
+height to content. Run the demo with `cd example && flutter run` to browse sample
+emails, or open a real `.eml`/`.html` file from disk (📂 in the app bar) — `.eml` files are
 MIME-decoded to their HTML body (quoted-printable/base64 + inline `cid:` images).
 
 For legacy fixed-width mail, enable `fitToWidth`. Responsive `@media` rules are
@@ -134,14 +134,19 @@ blocked; incoming Android EML reads are asynchronous and limited to 20 MiB.
 
 ## Development
 
-The repository contains the renderer, a runnable demo, and synthetic regression
-tests. The demo's file picker and desktop drag-and-drop dependencies are declared
-in `pubspec.yaml`.
+The root package contains the renderer and its synthetic regression tests. Its
+runtime dependencies are limited to the Flutter SDK and `html`.
+
+The runnable demo is a separate app in `example/`, with its own platform projects,
+tests, and `pubspec.yaml`. It depends on the renderer through `path: ../`;
+`file_picker` and `desktop_drop` are dependencies of the example app only.
 
 Use Flutter 3.47.7 (bundled Dart 3.13.5), matching the CI setup. The package
 requires Dart 3.12.2 or later within the 3.x series.
 
 ```sh
+flutter pub get --no-example
+cd example
 flutter pub get
 flutter run
 ```
@@ -149,13 +154,20 @@ flutter run
 Run the same checks used by CI before submitting changes:
 
 ```sh
-dart format --output=none --set-exit-if-changed lib test
-flutter analyze
-flutter test --coverage
-flutter build apk --debug
+# From the repository root:
+flutter pub get --no-example
+dart format --output=none --set-exit-if-changed lib test example/lib example/test
+flutter analyze --no-pub
+flutter test --no-pub --coverage
+
+cd example
+flutter pub get
+flutter analyze --no-pub
+flutter test --no-pub --coverage
+flutter build apk --debug --no-pub
 ```
 
 Android input tests also run in CI with `./gradlew :app:testDebugUnitTest` from
-the `android/` directory (`gradlew.bat` on Windows). Test inputs use synthetic
-content and placeholder addresses. Keep personal email files, credentials, and
-screenshots out of version control.
+the `example/android/` directory (`gradlew.bat` on Windows). Test inputs use
+synthetic content and placeholder addresses. Keep personal email files,
+credentials, and screenshots out of version control.

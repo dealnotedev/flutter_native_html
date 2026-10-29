@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Separate the demo app into `example/` so the renderer no longer depends on
+  `file_picker` or `desktop_drop`.
 - Treat table heights as minimums so zero-height email sections grow around
   their content; preserve single-row vertical alignment and divider backgrounds.
 - Remove internal email collection and comparison utilities and agent notes

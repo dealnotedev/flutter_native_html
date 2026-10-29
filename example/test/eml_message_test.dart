@@ -1,12 +1,26 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter_native_html/demo/eml_message.dart';
+import 'package:flutter_native_html_example/demo/eml_message.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 Uint8List _bytes(String s) => Uint8List.fromList(latin1.encode(s));
 
 void main() {
+  test('malformed MIME base64 does not throw and encoded subject decodes', () {
+    final raw = Uint8List.fromList(
+      'Subject: =?UTF-8?B?0KLQtdGB0YI=?=\r\n'
+              'Content-Type: image/png\r\n'
+              'Content-ID: <x>\r\n'
+              'Content-Transfer-Encoding: base64\r\n\r\n%%%'
+          .codeUnits,
+    );
+    final message = EmlMessage.parse(raw);
+    // Preserve multibyte UTF-8 coverage for the encoded-word subject.
+    expect(message.subject, '\u0422\u0435\u0441\u0442');
+    expect(message.inlineImages['x'], isEmpty);
+  });
+
   test('extracts quoted-printable HTML from multipart/alternative', () {
     const eml =
         'Subject: Hello\r\n'

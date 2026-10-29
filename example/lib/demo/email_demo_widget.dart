@@ -5,8 +5,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_native_html/flutter_native_html.dart';
 
-import '../flutter_native_html.dart';
 import 'email_input.dart';
 import 'eml_message.dart';
 import 'sample_emails.dart';

@@ -15,10 +15,16 @@ jobs:
           flutter-version: '3.47.7'
           channel: stable
           cache: true
+      - run: flutter pub get --no-example
       - run: flutter pub get
-      - run: dart format --output=none --set-exit-if-changed lib test
-      - run: flutter analyze
-      - run: flutter test --coverage
+        working-directory: example
+      - run: dart format --output=none --set-exit-if-changed lib test example/lib example/test
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub --coverage
+      - run: flutter analyze --no-pub
+        working-directory: example
+      - run: flutter test --no-pub --coverage
+        working-directory: example
 
   android:
     runs-on: ubuntu-latest
@@ -34,6 +40,8 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter build apk --debug
+        working-directory: example
+      - run: flutter build apk --debug --no-pub
+        working-directory: example
       - run: ./gradlew :app:testDebugUnitTest --console=plain
-        working-directory: android
+        working-directory: example/android

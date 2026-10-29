@@ -1,0 +1,25 @@
+name: flutter_native_html_example
+description: "Example app for the flutter_native_html email renderer."
+publish_to: 'none'
+version: 0.1.2
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_native_html:
+    path: ../
+  # 11.x requires AGP 9 Built-in Kotlin, which Flutter currently disables for
+  # plugin compatibility. Keep the compatible 10.x release.
+  file_picker: 10.3.10
+  desktop_drop: ^0.7.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_native_html/demo/eml_message.dart';
 import 'package:flutter_native_html/flutter_native_html.dart';
 import 'package:flutter_native_html/src/css/css_parser.dart';
 import 'package:flutter_native_html/src/css/css_selector.dart';
@@ -242,19 +241,5 @@ void main() {
     expect(green.left, closeTo(blue.left, 1));
     expect(blue.top, closeTo(green.bottom, 1));
     expect(tester.takeException(), isNull);
-  });
-
-  test('malformed MIME base64 does not throw and encoded subject decodes', () {
-    final raw = Uint8List.fromList(
-      'Subject: =?UTF-8?B?0KLQtdGB0YI=?=\r\n'
-              'Content-Type: image/png\r\n'
-              'Content-ID: <x>\r\n'
-              'Content-Transfer-Encoding: base64\r\n\r\n%%%'
-          .codeUnits,
-    );
-    final message = EmlMessage.parse(raw);
-    // Preserve multibyte UTF-8 coverage for the encoded-word subject.
-    expect(message.subject, '\u0422\u0435\u0441\u0442');
-    expect(message.inlineImages['x'], isEmpty);
   });
 }

@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_native_html/demo/email_demo_widget.dart';
-import 'package:flutter_native_html/demo/email_input.dart';
 import 'package:flutter_native_html/flutter_native_html.dart';
+import 'package:flutter_native_html_example/demo/email_demo_widget.dart';
+import 'package:flutter_native_html_example/demo/email_input.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
