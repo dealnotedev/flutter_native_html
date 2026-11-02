@@ -169,6 +169,7 @@ class HtmlStyle {
     this.letterSpacing,
     this.textAlign,
     this.legacyTextAlign,
+    this.blockAlign,
     this.cellTextAlign,
     this.textTransform,
     this.whiteSpace,
@@ -220,6 +221,7 @@ class HtmlStyle {
   /// HTML alignment hints inherit through blocks, but reset at a table.
   /// Authored CSS text-align continues to inherit into table cells.
   final bool? legacyTextAlign;
+
   final CssTextTransform? textTransform;
   final CssWhiteSpace? whiteSpace;
   final bool? visibilityHidden;
@@ -236,6 +238,9 @@ class HtmlStyle {
   final Color? anchorColor;
 
   // --- Non-inherited (box) properties ---
+  /// Box placement from the immediate parent cell's HTML `align` hint.
+  /// Independent of this element's text-align and deliberately not inherited.
+  final TextAlign? blockAlign;
   final Color? backgroundColor;
   // A resolved background URL or CSS linear-gradient(...).
   final String? backgroundImage;
@@ -370,6 +375,7 @@ class HtmlStyle {
       legacyTextAlign: other.textAlign != null
           ? other.legacyTextAlign ?? false
           : other.legacyTextAlign ?? legacyTextAlign,
+      blockAlign: other.blockAlign ?? blockAlign,
       cellTextAlign: other.cellTextAlign ?? cellTextAlign,
       textTransform: other.textTransform ?? textTransform,
       whiteSpace: other.whiteSpace ?? whiteSpace,

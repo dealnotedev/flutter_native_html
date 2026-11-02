@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve centered percentage-width text blocks inside HTML-aligned table
+  cells, including undecorated blocks, without changing their text alignment.
 - Add `estimateHtmlDocumentInsets` for per-side estimates of existing document
   spacing using the CSS cascade and media-query width. Report unmeasurable sides
   as unknown instead of inventing zeroes; leave rendering and host margin policy

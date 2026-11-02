@@ -1449,6 +1449,10 @@ class HtmlTreeBuilder {
     // So a `display:table-cell` div must not size itself — its anonymous-table
     // parent ([_buildAnonymousCssTable]) reads the width and lays the columns.
     final isTableCell = style.display == CssDisplay.tableCell;
+    final percentWidth =
+        !isTableCell && style.width?.unit == CssLengthUnit.percent
+        ? style.width!.value / 100.0
+        : null;
     final declaredWidth = isTableCell
         ? null
         : _resolveAbsoluteLength(style.width, fontSize, rootFontSize);
@@ -1505,6 +1509,7 @@ class HtmlTreeBuilder {
         !applyPercentInside &&
         !hasDecoration &&
         width == null &&
+        percentWidth == null &&
         minWidth == null &&
         maxWidth == null &&
         height == null &&
@@ -1541,15 +1546,16 @@ class HtmlTreeBuilder {
       if (margin != null) result = Padding(padding: margin, child: result);
     }
 
-    final percentWidth =
-        !isTableCell && style.width?.unit == CssLengthUnit.percent
-        ? style.width!.value / 100.0
-        : null;
     if (percentWidth != null && percentWidth >= 0) {
       result = maxWidth == null
           ? FractionallySizedBox(
               widthFactor: percentWidth,
-              alignment: Alignment.topLeft,
+              // HTML cell align positions this box even when its own CSS
+              // text-align is left. Ordinary inherited CSS text-align must
+              // not move block boxes such as percentage progress fills.
+              alignment: inline
+                  ? Alignment.topLeft
+                  : _blockAlignment(style, useTextAlign: false),
               child: result,
             )
           : PercentMaxWidthBox(
@@ -1611,36 +1617,16 @@ class HtmlTreeBuilder {
     // width, centered for `margin:0 auto` / `text-align:center` / `max-width`
     // (the common centered-container idiom), otherwise left-aligned.
     if ((width != null || maxWidth != null) && !inline) {
-      final m = style.margin;
-      final leftAuto = m?.left?.isAuto ?? false;
-      final rightAuto = m?.right?.isAuto ?? false;
-      // Auto margins position the box per CSS: both auto -> centre, one auto ->
-      // pushed to the opposite side (`margin:0 auto 0 0` = right-auto -> left).
-      // `float` pins it to its side. A bare `max-width` block with no auto
-      // margins or alignment centres (the common centered-container idiom).
-      final centerByMaxWidth =
-          maxWidth != null && width == null && percentWidth == null;
-      final Alignment alignment;
-      if (style.float == 'left') {
-        alignment = Alignment.topLeft;
-      } else if (style.float == 'right') {
-        alignment = Alignment.topRight;
-      } else if (leftAuto && rightAuto) {
-        alignment = Alignment.topCenter;
-      } else if (rightAuto) {
-        alignment = Alignment.topLeft;
-      } else if (leftAuto) {
-        alignment = Alignment.topRight;
-      } else if (style.textAlign == TextAlign.center) {
-        alignment = Alignment.topCenter;
-      } else if (style.textAlign == TextAlign.right) {
-        alignment = Alignment.topRight;
-      } else if (centerByMaxWidth) {
-        alignment = Alignment.topCenter;
-      } else {
-        alignment = Alignment.topLeft;
-      }
-      result = Align(alignment: alignment, heightFactor: 1.0, child: result);
+      result = Align(
+        alignment: _blockAlignment(
+          style,
+          useTextAlign: percentWidth == null,
+          centerByMaxWidth:
+              maxWidth != null && width == null && percentWidth == null,
+        ),
+        heightFactor: 1.0,
+        child: result,
+      );
     }
     if (style.visibilityHidden ?? false) {
       result = IgnorePointer(
@@ -1655,6 +1641,25 @@ class HtmlTreeBuilder {
       );
     }
     return result;
+  }
+
+  Alignment _blockAlignment(
+    HtmlStyle style, {
+    bool useTextAlign = true,
+    bool centerByMaxWidth = false,
+  }) {
+    final leftAuto = style.margin?.left?.isAuto ?? false;
+    final rightAuto = style.margin?.right?.isAuto ?? false;
+    // Floats and auto margins position the box before HTML alignment hints.
+    if (style.float == 'left') return Alignment.topLeft;
+    if (style.float == 'right') return Alignment.topRight;
+    if (leftAuto && rightAuto) return Alignment.topCenter;
+    if (rightAuto) return Alignment.topLeft;
+    if (leftAuto) return Alignment.topRight;
+    final align = style.blockAlign ?? (useTextAlign ? style.textAlign : null);
+    if (align == TextAlign.center) return Alignment.topCenter;
+    if (align == TextAlign.right) return Alignment.topRight;
+    return centerByMaxWidth ? Alignment.topCenter : Alignment.topLeft;
   }
 
   /// Draws a CSS `background-image` behind [content], offset by

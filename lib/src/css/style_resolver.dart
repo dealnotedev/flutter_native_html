@@ -137,9 +137,10 @@ class StyleResolver {
   }
 
   /// A td/th `align` presentation hint applies to an immediate block child's
-  /// text as well (e.g. `<td align=center><h3>...</h3>`). Keep tables out: their
-  /// box placement is handled by TableHandler and inheriting this value into a
-  /// nested data table would incorrectly center all of its cells.
+  /// box placement and text (e.g. `<td align=center><h3>...</h3>`). Keep box
+  /// placement separate so the child's CSS text-align can override its text
+  /// without moving its box. Keep tables out: TableHandler places them, and
+  /// inheriting this value would incorrectly center a nested data table's cells.
   HtmlStyle _parentCellAlignment(dom.Element element, String tag) {
     if (tag == 'table') return HtmlStyle.empty;
     final parent = element.parent;
@@ -165,7 +166,9 @@ class StyleResolver {
       'justify' => TextAlign.justify,
       _ => null,
     };
-    return value == null ? HtmlStyle.empty : HtmlStyle(textAlign: value);
+    return value == null
+        ? HtmlStyle.empty
+        : HtmlStyle(textAlign: value, blockAlign: value);
   }
 
   // --- User-agent default styles ---
