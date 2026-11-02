@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `hasNoHtmlPageLayout` to conservatively identify HTML with content
+  formatting but no detected page layout, using the renderer's CSS cascade.
+  Keep local buttons, avatars and data tables separate from page scaffolding;
+  leave the decision to add padding to the host.
 - Preserve centered percentage-width text blocks inside HTML-aligned table
   cells, including undecorated blocks, without changing their text alignment.
 - Add `estimateHtmlDocumentInsets` for per-side estimates of existing document

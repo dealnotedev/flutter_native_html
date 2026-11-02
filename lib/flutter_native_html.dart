@@ -23,6 +23,7 @@ export 'src/config/html_image_resolver.dart';
 export 'src/parsing/html_sanitizer.dart';
 export 'src/parsing/html_email_parser.dart';
 export 'src/analysis/html_document_insets.dart';
+export 'src/analysis/html_page_layout.dart';
 
 // Extension points (custom rendering)
 export 'src/rendering/element_handler.dart';

@@ -87,6 +87,37 @@ can leave sides unknown. This function does not build widgets, fetch resources,
 mutate the parsed document, or change rendering defaults. Recompute when the
 document, available width or base font size changes.
 
+## Detecting HTML without a page layout
+
+```dart
+final document = HtmlEmailParser().parse(emailBody);
+const config = HtmlRenderConfig(baseFontSize: 16);
+final needsHostPadding = hasNoHtmlPageLayout(
+  document,
+  availableWidth: 360,
+  config: config,
+);
+
+// The host decides whether to add padding around HtmlEmailView.document.
+```
+
+This conservative heuristic identifies nonempty HTML with ordinary content
+formatting but no detected page layout, such as a GitHub notification containing
+an avatar, headings, lists and a data table. It uses the renderer's CSS cascade
+and media queries. Root styles and block containers are checked for spacing,
+backgrounds, borders, sizing and layout scaffolding. Layout signals must cover
+at least half the visible content, without double-counting nested containers.
+Content weight is non-whitespace text length plus 64 per image;
+tracking pixels and hidden content are ignored. Local buttons, small avatars,
+quotations, lists and semantic data tables do not by themselves define a page.
+
+`false` means there is evidence of page layout **or** no safe recommendation
+(empty content or custom handlers). This is not a measurement of existing
+gutters: an authored page may intentionally have zero margins. Only supported
+CSS is considered, and the content-weight rule is heuristic. Recompute at the
+renderer width when the document, width or config changes. Analysis does not
+mutate the document, load images, add padding or change rendering defaults.
+
 ## Architecture
 
 A linear pipeline, each stage isolated and replaceable:
