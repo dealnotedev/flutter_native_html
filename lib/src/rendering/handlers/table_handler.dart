@@ -77,13 +77,14 @@ class TableHandler extends HtmlElementHandler {
             !fillsWidth &&
             (context.style.display == CssDisplay.inlineBlock ||
                 context.style.display == CssDisplay.inline);
-        final table = _buildTable(
+        final built = _buildTable(
           element,
           context,
           inline: inline || cssFloating,
           percentWidthAllocated: legacyPercentColumn,
           forceShrinkToFit: legacyAlignFloating && (w == null || w.isAuto),
         );
+        final table = built.widget;
         // Email templates commonly build a four-item desktop menu as two
         // sibling tables floated left/right, each containing two cells. Treat
         // consecutive floated tables as half-width columns so they share one
@@ -110,7 +111,7 @@ class TableHandler extends HtmlElementHandler {
                   ),
                 ),
               ]
-            : [BlockResult(table)];
+            : [built];
       case 'tr':
         final parent = element.parent;
         return [
@@ -144,7 +145,7 @@ class TableHandler extends HtmlElementHandler {
     }
   }
 
-  Widget _buildTable(
+  _TableBlockResult _buildTable(
     dom.Element table,
     HtmlRenderContext context, {
     bool inline = false,
@@ -152,7 +153,9 @@ class TableHandler extends HtmlElementHandler {
     bool forceShrinkToFit = false,
   }) {
     final allRows = _rowsOf(table, context);
-    if (allRows.isEmpty) return const SizedBox.shrink();
+    if (allRows.isEmpty) {
+      return const _TableBlockResult(SizedBox.shrink(), shrinkWrapWidth: true);
+    }
 
     // Resolve every row/cell once.
     final rows = <dom.Element>[];
@@ -178,7 +181,9 @@ class TableHandler extends HtmlElementHandler {
       ];
       rowData.add(_RowData(rowCtx, cells));
     }
-    if (rows.isEmpty) return const SizedBox.shrink();
+    if (rows.isEmpty) {
+      return const _TableBlockResult(SizedBox.shrink(), shrinkWrapWidth: true);
+    }
 
     final columns = rowData.fold<int>(
       0,
@@ -454,13 +459,40 @@ class TableHandler extends HtmlElementHandler {
       // LOOSE constraints, where a bare Align shrinks to its child and can't
       // position it — so a `margin:0 auto` button row stays left. SizedBox
       // makes the box take the offered width (clamped where bounded), giving
-      // the Align room to centre/right-align the content-sized table.
-      decorated = SizedBox(
-        width: double.infinity,
-        child: Align(alignment: alignment, heightFactor: 1.0, child: decorated),
-      );
+      // Align room to position the table. Inside an auto inline-block the
+      // table must instead retain its own width.
+      decorated = parentInlineBlock
+          ? Align(
+              alignment: alignment,
+              widthFactor: 1,
+              heightFactor: 1,
+              child: decorated,
+            )
+          : SizedBox(
+              width: double.infinity,
+              child: Align(
+                alignment: alignment,
+                heightFactor: 1.0,
+                child: decorated,
+              ),
+            );
     }
-    return decorated;
+    // These tables already determine their own width under loose constraints.
+    // Keep that fact with the build result so an enclosing auto inline-block
+    // cell does not measure the same nested table again.
+    final shrinkWrapWidth =
+        parentInlineBlock &&
+        !hasStack &&
+        (native && !layout!.hasFlex ||
+            wrapsInlineCells &&
+                rowData.every(
+                  (row) => row.cells.every(
+                    (cell) =>
+                        cell.ctx.style.width?.unit != CssLengthUnit.percent &&
+                        cell.ctx.style.maxWidth?.unit != CssLengthUnit.percent,
+                  ),
+                ));
+    return _TableBlockResult(decorated, shrinkWrapWidth: shrinkWrapWidth);
   }
 
   bool _parentIsAutoInlineBlock(dom.Element table, HtmlRenderContext context) {
@@ -980,48 +1012,17 @@ class TableHandler extends HtmlElementHandler {
         TextAlign.right || TextAlign.end => WrapAlignment.end,
         _ => WrapAlignment.start,
       };
-      final imageOnlyInlineRow = row.cells.every(
-        (cell) => cell.content.onlyImages,
+      // Icon-only cells are inline boxes too: a non-wrapping Row overflows
+      // when their natural widths exceed the line, even by a fraction of a px.
+      Widget wrapped = Wrap(
+        alignment: alignment,
+        spacing: spacing.h,
+        runSpacing: spacing.v,
+        textDirection: context.style.textDirection,
+        children: [
+          for (final cell in row.cells) _inlineBlockCell(cell, defaultPadding),
+        ],
       );
-      final imageOnlyShrinkRow =
-          imageOnlyInlineRow &&
-          row.cells.every((cell) {
-            final width = cell.ctx.style.width;
-            final maxWidth = cell.ctx.style.maxWidth;
-            return (width == null ||
-                    width.isAuto ||
-                    width.unit != CssLengthUnit.percent) &&
-                (maxWidth == null || maxWidth.unit != CssLengthUnit.percent);
-          });
-      Widget wrapped;
-      if (imageOnlyShrinkRow) {
-        final rowWidget = Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          textDirection: context.style.textDirection,
-          children: [
-            for (final cell in row.cells)
-              _inlineBlockCell(cell, defaultPadding),
-          ],
-        );
-        final rowAlignment = switch (alignment) {
-          WrapAlignment.center => Alignment.topCenter,
-          WrapAlignment.end => Alignment.topRight,
-          _ => Alignment.topLeft,
-        };
-        wrapped = Align(alignment: rowAlignment, child: rowWidget);
-      } else {
-        wrapped = Wrap(
-          alignment: alignment,
-          spacing: spacing.h,
-          runSpacing: spacing.v,
-          textDirection: context.style.textDirection,
-          children: [
-            for (final cell in row.cells)
-              _inlineBlockCell(cell, defaultPadding),
-          ],
-        );
-      }
       final background = row.ctx.style.backgroundColor;
       if (background != null) {
         wrapped = ColoredBox(color: background, child: wrapped);
@@ -1039,7 +1040,11 @@ class TableHandler extends HtmlElementHandler {
 
   Widget _inlineBlockCell(_CellData cell, EdgeInsets defaultPadding) {
     final style = cell.ctx.style;
-    Widget content = _cellContent(cell.element, cell.ctx);
+    Widget content = _cellContent(
+      cell.element,
+      cell.ctx,
+      shrinkWrap: style.width == null || style.width!.isAuto,
+    );
     if (_resolveHeightPx(style.height, cell.ctx) != null) {
       content = _alignVertically(
         content,
@@ -1807,6 +1812,7 @@ class TableHandler extends HtmlElementHandler {
   ) {
     final rowCtx = context.builder.contextForDescendant(tr, context);
     final cells = <Widget>[];
+    final percentageCells = <int, double>{};
     var cellEls = _cellsOf(tr, context);
     if (rtl) cellEls = cellEls.reversed.toList();
     final singleCellRow = cellEls.length == 1;
@@ -1877,13 +1883,43 @@ class TableHandler extends HtmlElementHandler {
       final fixed = !fullRowSpan && _cellIsFixed(cellCtx, spec);
       if (!fixed) hasFlexible = true;
       final wrapped = _wrapCellLink(decorated, cellEl, cellCtx);
-      cells.add(
-        singleCellRow && !fixed
-            ? SizedBox(width: double.infinity, child: wrapped)
-            : _sizedCell(cellEl, cellCtx, wrapped, spec),
-      );
+      final sized = singleCellRow && !fixed
+          ? SizedBox(width: double.infinity, child: wrapped)
+          : _sizedCell(cellEl, cellCtx, wrapped, spec);
+      if (sized is Expanded) {
+        final percent = spec != null
+            ? spec.percent
+            : style.width?.unit == CssLengthUnit.percent
+            ? style.width!.value
+            : 0.0;
+        if (percent > 0) percentageCells[cells.length] = percent;
+      }
+      cells.add(sized);
     }
     if (cells.isEmpty) return const SizedBox.shrink();
+
+    // Percentages and auto columns must share one scale, as in the native
+    // table path. A 6% gutter next to an auto content cell means 6:94, not
+    // 6:1. Ragged/spanning rows also need this when no shared grid is available.
+    final percentTotal = percentageCells.values.fold(0.0, (a, b) => a + b);
+    final autoTotal = cells.asMap().entries.fold(0, (sum, entry) {
+      final child = entry.value;
+      return child is Expanded && !percentageCells.containsKey(entry.key)
+          ? sum + child.flex
+          : sum;
+    });
+    if (percentTotal > 0 && percentTotal < 100 && autoTotal > 0) {
+      for (var i = 0; i < cells.length; i++) {
+        final child = cells[i];
+        if (child is! Expanded) continue;
+        final weight =
+            percentageCells[i] ?? (100 - percentTotal) * child.flex / autoTotal;
+        cells[i] = Expanded(
+          flex: (weight * 1000).round().clamp(1, 1000000),
+          child: child.child,
+        );
+      }
+    }
 
     Widget row;
     if (singleCellRow && hasFlexible) {
@@ -2176,7 +2212,11 @@ class TableHandler extends HtmlElementHandler {
     return resolve(p.left) + resolve(p.right);
   }
 
-  Widget _cellContent(dom.Element cell, HtmlRenderContext cellCtx) {
+  Widget _cellContent(
+    dom.Element cell,
+    HtmlRenderContext cellCtx, {
+    bool shrinkWrap = false,
+  }) {
     if (cellCtx.style.overflowHidden == true &&
         cellCtx.style.textOverflow == 'ellipsis') {
       final meaningful = cell.nodes
@@ -2195,12 +2235,13 @@ class TableHandler extends HtmlElementHandler {
             childCtx.style.preventsWrapping) {
           // Keep the inline text in this paragraph so ellipsis can remove glyphs,
           // rather than treating the entire nowrap span as one atomic widget.
-          return cellCtx.builder.flow(
+          final content = cellCtx.builder.flow(
             cellCtx.builder.buildChildNodes(child, childCtx.childInherited),
             childCtx.style.merge(
               const HtmlStyle(overflowHidden: true, textOverflow: 'ellipsis'),
             ),
           );
+          return shrinkWrap ? IntrinsicWidth(child: content) : content;
         }
       }
     }
@@ -2208,7 +2249,84 @@ class TableHandler extends HtmlElementHandler {
       cell,
       cellCtx.childInherited,
     );
-    return cellCtx.builder.flow(results, cellCtx.style);
+    final inline = shrinkWrap && results.every((r) => r is InlineResult);
+    final content = cellCtx.builder.flow(
+      results,
+      cellCtx.style,
+      textWidthBasis: inline
+          ? TextWidthBasis.longestLine
+          : TextWidthBasis.parent,
+    );
+    if (!shrinkWrap || inline) return content;
+    final meaningful = results
+        .where(
+          (r) =>
+              r is! InlineResult ||
+              !r.isWhitespaceOnly ||
+              cellCtx.style.preservesWhitespace ||
+              r.span.toPlainText().contains('\u00a0'),
+        )
+        .toList();
+    if (meaningful.length == 1 &&
+        meaningful.single is _TableBlockResult &&
+        (meaningful.single as _TableBlockResult).shrinkWrapWidth) {
+      return content;
+    }
+    final width = _fixedChildWidth(cell, cellCtx, meaningful);
+    if (width != null) return SizedBox(width: width, child: content);
+    // Mixed flow and unresolved block widths still need shrink-to-fit sizing.
+    return IntrinsicWidth(child: content);
+  }
+
+  double? _fixedChildWidth(
+    dom.Element cell,
+    HtmlRenderContext ctx,
+    List<HtmlBuildResult> results,
+  ) {
+    // In these simple boxes the declared width is also the outer width.
+    // Complex box models and overridden handlers keep the intrinsic fallback.
+    if (results.length != 1 ||
+        results.single is! BlockResult ||
+        cell.children.length != 1) {
+      return null;
+    }
+    final child = cell.children.single;
+    if (!const {
+          'div',
+          'p',
+          'section',
+          'article',
+          'h1',
+          'h2',
+          'h3',
+          'h4',
+          'h5',
+          'h6',
+        }.contains(child.localName) ||
+        ctx.config.handlers.any(
+          (handler) => handler.tags.contains(child.localName),
+        )) {
+      return null;
+    }
+    final style = ctx.builder.contextForDescendant(child, ctx).style;
+    final width = style.width;
+    if (width == null ||
+        width.isAuto ||
+        width.unit == CssLengthUnit.percent ||
+        style.minWidth != null ||
+        style.maxWidth != null ||
+        style.margin != null ||
+        style.padding != null ||
+        style.borders != null) {
+      return null;
+    }
+    final resolved = width.resolve(
+      fontSize: style.resolvedFontSize,
+      rootFontSize: ctx.config.baseFontSize,
+    );
+    return resolved != null && resolved.isFinite && resolved >= 0
+        ? resolved
+        : null;
   }
 
   List<dom.Element> _rowsOf(dom.Element table, HtmlRenderContext context) {
@@ -2975,6 +3093,11 @@ class _ColSpec {
   double px = 0;
   double percent = 0;
   bool intrinsic = false;
+}
+
+class _TableBlockResult extends BlockResult {
+  const _TableBlockResult(super.widget, {required this.shrinkWrapWidth});
+  final bool shrinkWrapWidth;
 }
 
 class _RowData {

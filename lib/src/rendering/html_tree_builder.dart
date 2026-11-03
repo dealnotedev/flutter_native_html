@@ -781,7 +781,7 @@ class HtmlTreeBuilder {
       );
     } else {
       row = Row(
-        mainAxisSize: anyFlex ? MainAxisSize.max : MainAxisSize.min,
+        mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: mainAxisAlignment,
         crossAxisAlignment: allMiddle
             ? CrossAxisAlignment.center
@@ -789,6 +789,23 @@ class HtmlTreeBuilder {
         textDirection: ctx.style.textDirection,
         children: [for (final cell in cells) cell.child],
       );
+      if (cells.every((cell) => cell.fixedPx != null)) {
+        // Desktop email columns can add up to the container's border-box
+        // width, leaving a slightly smaller content box. Match fixed HTML
+        // table rows: fit the columns without overflowing the border.
+        final rightAligned = mainAxisAlignment == MainAxisAlignment.end
+            ? ctx.style.textDirection != TextDirection.rtl
+            : ctx.style.textDirection == TextDirection.rtl;
+        row = FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: mainAxisAlignment == MainAxisAlignment.center
+              ? Alignment.topCenter
+              : rightAligned
+              ? Alignment.topRight
+              : Alignment.topLeft,
+          child: row,
+        );
+      }
     }
     return decorateTable ? decorate(row, ctx.style) : row;
   }
@@ -903,7 +920,13 @@ class HtmlTreeBuilder {
 
   /// Lays a result list out vertically: runs of inline spans become rich-text
   /// paragraphs; block results are emitted as siblings.
-  Widget flow(List<HtmlBuildResult> results, HtmlStyle containerStyle) {
+  /// A single inline run can use [TextWidthBasis.longestLine] to shrink during
+  /// paragraph layout without an additional intrinsic-width parent.
+  Widget flow(
+    List<HtmlBuildResult> results,
+    HtmlStyle containerStyle, {
+    TextWidthBasis textWidthBasis = TextWidthBasis.parent,
+  }) {
     final children = <Widget>[];
     final buffer = <InlineResult>[];
     final floats = <FloatResult>[];
@@ -1010,6 +1033,7 @@ class HtmlTreeBuilder {
         }
         final paragraph = Text.rich(
           TextSpan(children: spans),
+          textWidthBasis: textWidthBasis,
           textAlign: containerStyle.effectiveTextAlign ?? TextAlign.start,
           textDirection: containerStyle.textDirection,
           softWrap: !containerStyle.preventsWrapping,
