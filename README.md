@@ -45,6 +45,35 @@ Untrusted inputs are bounded by `maxHtmlCharacters`, `maxDomNodes`,
 `maxCssCharacters`, and `maxCssRules`. The default resolver also caps encoded
 payloads and decoded image dimensions.
 
+### Optional fallback side padding
+
+```dart
+HtmlEmailView(
+  html: emailBody,
+  config: const HtmlRenderConfig(
+    fitToWidth: true,
+    fallbackHorizontalPadding: 16,
+  ),
+)
+```
+
+`fallbackHorizontalPadding` defaults to **0 (disabled)**. When enabled, each
+side without an authored text gutter receives the configured space. Existing
+positive author insets are preserved, including values smaller than the
+fallback. This is a fallback for absent gutters, not a minimum inset policy.
+
+The renderer uses CSS inset estimates, then scaled text allocation for layouts
+whose estimates are unknown, including fixed-width and spanning tables. Insets
+within 0.5 logical pixels of zero are treated as missing. The padding surrounds
+the whole document; `fitToWidth` uses the remaining width. A second layout checks
+for responsive author spacing and cancels the fallback if it would be duplicated.
+This is a layout heuristic, not a measurement of glyph ink or image transparency.
+
+Image-only and empty content, rejected documents, and configurations with custom
+handlers keep their existing layout. Hosts that already add outer gutters can
+leave this option disabled. Both raw HTML and `HtmlEmailView.document` support it;
+analysis does not mutate the prepared document or load additional resources.
+
 ### Estimate spacing already inside a document
 
 ```dart
@@ -80,7 +109,7 @@ and `cellspacing`, and does not mistake a button's local padding for a document
 gutter. Short text is considered within its available line box; unused space
 after the last word is not an authored right margin.
 
-Estimates exclude host padding, safe areas, background paint, glyph/bitmap ink
+Estimates exclude host/fallback padding, safe areas, background paint, glyph/bitmap ink
 bounds and the `fitToWidth` paint scale. Images, multi-column/spanning tables,
 inline boxes, fractional widths, constrained heights, floats and custom handlers
 can leave sides unknown. This function does not build widgets, fetch resources,

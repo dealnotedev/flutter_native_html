@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../analysis/html_document_insets.dart';
 import '../config/html_render_config.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import '../parsing/html_email_parser.dart';
 import '../rendering/html_tree_builder.dart';
+import 'fallback_horizontal_padding.dart';
 import 'fit_to_width.dart';
 
 /// A native (no-WebView) widget that renders an HTML email body.
@@ -157,7 +159,7 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
 
     // Resolve against the actual available width so responsive emails adapt:
     // `@media (max-width: N)` rules apply when the layout is narrower than N.
-    return LayoutBuilder(
+    final layout = LayoutBuilder(
       builder: (_, constraints) {
         final width = constraints.maxWidth.isFinite
             ? constraints.maxWidth
@@ -207,6 +209,19 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
         _renderedFontFamily = rootFontFamily;
         return rendered;
       },
+    );
+    if (config.fallbackHorizontalPadding == 0 || config.handlers.isNotEmpty) {
+      return layout;
+    }
+    return HtmlFallbackHorizontalPadding(
+      padding: config.fallbackHorizontalPadding,
+      estimateInsets: (width) => estimateHtmlDocumentInsets(
+        parsed,
+        availableWidth: width,
+        config: config,
+        textDirection: rootStyle.textDirection ?? TextDirection.ltr,
+      ),
+      child: layout,
     );
   }
 }

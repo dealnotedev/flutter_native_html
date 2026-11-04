@@ -48,6 +48,7 @@ class HtmlRenderConfig {
     this.defaultTableCellSpacing = 0,
     this.fitToWidth = false,
     this.fitToWidthMinScale = 0.5,
+    this.fallbackHorizontalPadding = 0,
     this.maxHtmlCharacters = 2 * 1024 * 1024,
     this.maxDomNodes = 50000,
     this.maxCssCharacters = 512 * 1024,
@@ -58,6 +59,11 @@ class HtmlRenderConfig {
          'fitToWidthMinScale must be greater than 0 and at most 1',
        ),
        assert(baseFontSize > 0 && baseFontSize < double.infinity),
+       assert(
+         fallbackHorizontalPadding >= 0 &&
+             fallbackHorizontalPadding < double.infinity,
+         'fallbackHorizontalPadding must be finite and nonnegative',
+       ),
        assert(
          defaultTableCellSpacing >= 0 &&
              defaultTableCellSpacing < double.infinity,
@@ -139,6 +145,20 @@ class HtmlRenderConfig {
   /// result inside the viewport without making text unreadably small.
   final double fitToWidthMinScale;
 
+  /// Optional host-selected space for sides without authored text gutters.
+  ///
+  /// Zero disables this behavior. Each side is checked independently using CSS
+  /// inset estimates, then scaled text allocation when estimates are unknown.
+  /// Existing positive author insets are preserved, even when smaller than this
+  /// value. This is fallback padding, not a minimum inset for every document.
+  ///
+  /// The viewport is rechecked before accepting padding so responsive author
+  /// spacing is not duplicated. Image-only/empty content, rejected documents
+  /// and custom handlers retain their existing layout. With [fitToWidth], the
+  /// content fits into the width remaining after the fallback padding.
+  /// Hosts that already supply outer gutters should leave this at zero.
+  final double fallbackHorizontalPadding;
+
   /// Hard limit applied before parsing untrusted HTML on the UI isolate.
   final int maxHtmlCharacters;
   final int maxDomNodes;
@@ -166,6 +186,7 @@ class HtmlRenderConfig {
     double? defaultTableCellSpacing,
     bool? fitToWidth,
     double? fitToWidthMinScale,
+    double? fallbackHorizontalPadding,
     int? maxHtmlCharacters,
     int? maxDomNodes,
     int? maxCssCharacters,
@@ -209,6 +230,8 @@ class HtmlRenderConfig {
           defaultTableCellSpacing ?? this.defaultTableCellSpacing,
       fitToWidth: fitToWidth ?? this.fitToWidth,
       fitToWidthMinScale: fitToWidthMinScale ?? this.fitToWidthMinScale,
+      fallbackHorizontalPadding:
+          fallbackHorizontalPadding ?? this.fallbackHorizontalPadding,
       maxHtmlCharacters: maxHtmlCharacters ?? this.maxHtmlCharacters,
       maxDomNodes: maxDomNodes ?? this.maxDomNodes,
       maxCssCharacters: maxCssCharacters ?? this.maxCssCharacters,
