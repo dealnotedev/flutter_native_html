@@ -10,13 +10,15 @@ import '../parsing/html_email_parser.dart';
 
 /// A shared decision for rendering and pre-layout analysis at the same width.
 class EmailColorPolicy {
-  const EmailColorPolicy(this.brightness, {this.adapt = false});
+  const EmailColorPolicy(
+    this.brightness, {
+    this.adapt = false,
+    this.canvas = const Color(0xffffffff),
+  });
 
   final Brightness brightness;
   final bool adapt;
-  Color get canvas => brightness == Brightness.dark
-      ? const Color(0xff181818)
-      : const Color(0xffffffff);
+  final Color canvas;
   Color get text => brightness == Brightness.dark
       ? const Color(0xffeeeeee)
       : const Color(0xff000000);
@@ -36,6 +38,10 @@ EmailColorPolicy resolveEmailColorPolicy(
   if (preferred == Brightness.light) {
     return const EmailColorPolicy(Brightness.light);
   }
+  final dark = EmailColorPolicy(
+    Brightness.dark,
+    canvas: config.darkBackgroundColor,
+  );
 
   final base = HtmlStyle(
     fontSize: config.baseFontSize,
@@ -51,12 +57,12 @@ EmailColorPolicy resolveEmailColorPolicy(
       (resolver.colorSchemeFor(document.root) ?? document.colorScheme ?? '')
           .toLowerCase()
           .split(RegExp(r'\s+'));
-  if (scheme.contains('dark')) return const EmailColorPolicy(Brightness.dark);
+  if (scheme.contains('dark')) return dark;
   var simple = config.handlers.isEmpty;
   var hasText = false;
   final html = document.root.parent;
   if (html != null && document.stylesheet.hasDarkStylesFor(html, width)) {
-    return const EmailColorPolicy(Brightness.dark);
+    return dark;
   }
   if (html != null && !_simpleStyle(resolver.resolve(html, base))) {
     simple = false;
@@ -67,7 +73,7 @@ EmailColorPolicy resolveEmailColorPolicy(
     final style = resolver.resolve(element, inherited.inheritedOnly());
     // Visibility itself may be the theme switch (light/dark logo variants).
     if (document.stylesheet.hasDarkStylesFor(element, width)) {
-      return const EmailColorPolicy(Brightness.dark);
+      return dark;
     }
     if (style.display == CssDisplay.none || style.visibilityHidden == true) {
       continue;
@@ -87,7 +93,11 @@ EmailColorPolicy resolveEmailColorPolicy(
   final force = config.colorMode == HtmlEmailColorMode.dark;
   final onlyLight = scheme.contains('only') && scheme.contains('light');
   if (force || (simple && hasText && !onlyLight)) {
-    return const EmailColorPolicy(Brightness.dark, adapt: true);
+    return EmailColorPolicy(
+      Brightness.dark,
+      adapt: true,
+      canvas: config.darkBackgroundColor,
+    );
   }
   return const EmailColorPolicy(Brightness.light);
 }

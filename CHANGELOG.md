@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `darkBackgroundColor` to match the email canvas and adapted light neutral
+  backgrounds to the host application's dark surface, preserving source alpha
+  and author-provided dark themes.
+
 - Add independent Auto / Original / Dark email color modes. Honor author
   color-scheme metadata and media queries; adapt simple mail conservatively,
   preserve complex mail in Auto, and keep image pixels unchanged in manual Dark.

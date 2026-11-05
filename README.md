@@ -52,6 +52,7 @@ HtmlEmailView(
   html: emailBody,
   config: const HtmlRenderConfig(
     colorMode: HtmlEmailColorMode.auto, // auto (default), original, dark
+    darkBackgroundColor: Color(0xff262629), // match the host's dark surface
     // brightness: Brightness.dark,    // optional override; otherwise follows Theme
   ),
 )
@@ -86,6 +87,12 @@ so theme-specific visibility and spacing match the rendered document.
 
 The example app has separate app-theme and message-mode controls, plus an
 author-themed sample using CSS variables.
+
+`darkBackgroundColor` defaults to `#181818`. It sets the dark canvas and the
+target for adapted light neutral surfaces, so nested white/gray HTML backgrounds
+match the host instead of producing a separate dark rectangle. Source alpha is
+preserved. Author-provided dark-theme backgrounds and bitmap backdrops retain
+their own colors; Original mode continues to use the light canvas.
 
 ### Optional fallback side padding
 

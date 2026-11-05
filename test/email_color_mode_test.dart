@@ -84,6 +84,113 @@ double _contrast(Color foreground, Color background) {
 }
 
 void main() {
+  testWidgets(
+    'host dark surface controls canvas and nested adapted backgrounds',
+    (tester) async {
+      const surface = Color(0xff262629);
+      const alternate = Color(0xff303034);
+      final document = HtmlEmailParser().parse('''
+      <body style="background:white;color:black">
+      <div style="background:#f4f4f4"><p>Host-themed message</p></div></body>
+    ''');
+      final source = document.root.outerHtml;
+      for (final mode in [HtmlEmailColorMode.auto, HtmlEmailColorMode.dark]) {
+        for (final background in [surface, alternate]) {
+          await tester.pumpWidget(
+            _host(
+              document,
+              brightness: Brightness.dark,
+              config: HtmlRenderConfig(
+                colorMode: mode,
+                darkBackgroundColor: background,
+              ),
+            ),
+          );
+          expect(_canvas(tester), background);
+          final backgrounds = tester
+              .widgetList<Container>(
+                find.descendant(
+                  of: find.byType(HtmlEmailView),
+                  matching: find.byType(Container),
+                ),
+              )
+              .map((c) => c.decoration)
+              .whereType<BoxDecoration>()
+              .map((d) => d.color)
+              .whereType<Color>()
+              .toList();
+          expect(backgrounds, isNotEmpty);
+          expect(backgrounds, everyElement(background));
+          expect(
+            _contrast(_textColor(tester, 'Host-themed message'), background),
+            greaterThanOrEqualTo(4.49),
+          );
+        }
+      }
+      expect(document.root.outerHtml, source);
+    },
+  );
+
+  testWidgets('custom dark canvas preserves author themes and original mode', (
+    tester,
+  ) async {
+    const surface = Color(0xff262629);
+    const config = HtmlRenderConfig(
+      colorMode: HtmlEmailColorMode.dark,
+      darkBackgroundColor: surface,
+    );
+    final document = HtmlEmailParser().parse('''
+      <meta name="color-scheme" content="light dark">
+      <body style="background:#18202a;color:#e5edf5">Authored message</body>
+    ''');
+    await tester.pumpWidget(_host(document, config: config));
+    expect(_canvas(tester), surface);
+    final backgrounds = tester
+        .widgetList<Container>(
+          find.descendant(
+            of: find.byType(HtmlEmailView),
+            matching: find.byType(Container),
+          ),
+        )
+        .map((c) => c.decoration)
+        .whereType<BoxDecoration>()
+        .map((d) => d.color);
+    expect(backgrounds, contains(const Color(0xff18202a)));
+    final plain = HtmlEmailParser().parse(
+      '<body style="background:white">Original message</body>',
+    );
+    await tester.pumpWidget(
+      _host(
+        plain,
+        brightness: Brightness.dark,
+        config: config.copyWith(colorMode: HtmlEmailColorMode.original),
+      ),
+    );
+    expect(_canvas(tester), Colors.white);
+    expect(_textColor(tester, 'Original message'), Colors.black);
+  });
+
+  test(
+    'host surface adaptation retains alpha and existing colored surfaces',
+    () {
+      const surface = Color(0xff262629);
+      const transform = EmailColorTransform(darkBackgroundColor: surface);
+      const translucent = Color(0x80eeeeee);
+      expect(
+        transform.surface(translucent),
+        surface.withValues(alpha: translucent.a),
+      );
+      expect(transform.surface(Colors.transparent), Colors.transparent);
+      const dark = Color(0xff121212);
+      expect(transform.surface(dark), dark);
+      const brand = Color(0xff00ffff);
+      expect(
+        transform.surface(brand),
+        const EmailColorTransform().surface(brand),
+      );
+    },
+  );
+
   test('adaptation preserves text hierarchy and invisible colors', () {
     const transform = EmailColorTransform();
     const background = Color(0xff181818);
@@ -337,8 +444,18 @@ void main() {
   test(
     'copyWith can override modes and return brightness to the host theme',
     () {
-      const config = HtmlRenderConfig(brightness: Brightness.dark);
+      const config = HtmlRenderConfig(
+        brightness: Brightness.dark,
+        darkBackgroundColor: Color(0xff262629),
+      );
       expect(config.copyWith().brightness, Brightness.dark);
+      expect(config.copyWith().darkBackgroundColor, const Color(0xff262629));
+      expect(
+        config
+            .copyWith(darkBackgroundColor: const Color(0xff303034))
+            .darkBackgroundColor,
+        const Color(0xff303034),
+      );
       final copy = config.copyWith(
         brightness: null,
         colorMode: HtmlEmailColorMode.original,

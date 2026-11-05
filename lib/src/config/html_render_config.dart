@@ -56,6 +56,7 @@ class HtmlRenderConfig {
     this.linkColor,
     this.colorMode = HtmlEmailColorMode.auto,
     this.brightness,
+    this.darkBackgroundColor = const Color(0xff181818),
     this.autoLinkify = true,
     this.autoLinkColor,
     this.maxImageWidth,
@@ -131,6 +132,11 @@ class HtmlRenderConfig {
   /// Original and dark modes explicitly select light and dark respectively.
   final Brightness? brightness;
 
+  /// Canvas and target for adapted light neutral backgrounds in dark mode.
+  /// Use an opaque dark surface from the host theme. Author dark-theme colors,
+  /// bitmap backdrops and Original mode retain their own backgrounds.
+  final Color darkBackgroundColor;
+
   /// Auto-detects bare email addresses and URLs in text and turns them into
   /// tappable links (like Gmail). Matches on the host via [onLinkTap].
   final bool autoLinkify;
@@ -204,6 +210,7 @@ class HtmlRenderConfig {
     Object? linkColor = _unsetConfigValue,
     HtmlEmailColorMode? colorMode,
     Object? brightness = _unsetConfigValue,
+    Color? darkBackgroundColor,
     bool? autoLinkify,
     Object? autoLinkColor = _unsetConfigValue,
     Object? maxImageWidth = _unsetConfigValue,
@@ -245,6 +252,7 @@ class HtmlRenderConfig {
       brightness: identical(brightness, _unsetConfigValue)
           ? this.brightness
           : brightness as Brightness?,
+      darkBackgroundColor: darkBackgroundColor ?? this.darkBackgroundColor,
       autoLinkify: autoLinkify ?? this.autoLinkify,
       autoLinkColor: identical(autoLinkColor, _unsetConfigValue)
           ? this.autoLinkColor

@@ -5,12 +5,19 @@ import 'html_style.dart';
 /// Color-only adaptation, applied after the author cascade. Images and geometry
 /// are untouched. Contrast is evaluated against the composited local surface.
 class EmailColorTransform {
-  const EmailColorTransform();
+  const EmailColorTransform({
+    this.darkBackgroundColor = const Color(0xff181818),
+  });
+
+  final Color darkBackgroundColor;
 
   Color surface(Color color) {
     if (color.a == 0 || color.computeLuminance() < 0.18) return color;
     final hsl = HSLColor.fromColor(color);
-    return hsl.withLightness(hsl.saturation < 0.15 ? 0.10 : 0.25).toColor();
+    if (hsl.saturation < 0.15) {
+      return darkBackgroundColor.withValues(alpha: color.a);
+    }
+    return hsl.withLightness(0.25).toColor();
   }
 
   Color foreground(Color color, Color background, [double minimum = 4.5]) {

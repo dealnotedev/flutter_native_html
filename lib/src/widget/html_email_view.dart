@@ -185,7 +185,9 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
           availableWidth: width,
           brightness: colors.brightness,
           canvasColor: colors.canvas,
-          colorTransform: colors.adapt ? const EmailColorTransform() : null,
+          colorTransform: colors.adapt
+              ? EmailColorTransform(darkBackgroundColor: colors.canvas)
+              : null,
         );
 
         // Rebuild the tree; release recognizers from the previous build first.
