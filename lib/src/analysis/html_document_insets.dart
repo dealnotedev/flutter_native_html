@@ -8,6 +8,7 @@ import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import '../parsing/html_email_parser.dart';
+import 'email_color_policy.dart';
 
 /// Estimated space already provided by a document, in layout logical pixels.
 ///
@@ -60,11 +61,13 @@ class HtmlDocumentInsetsEstimate {
 /// gutter policy. In particular, [HtmlRenderConfig.fitToWidth] is not simulated:
 /// a fixed-width overflow leaves its horizontal sides unknown. The caller owns
 /// any fallback for unknown sides and any decision to add margins.
+/// Pass the host's [brightness] for auto mode; config overrides take precedence.
 HtmlDocumentInsetsEstimate estimateHtmlDocumentInsets(
   ParsedEmail document, {
   required double availableWidth,
   HtmlRenderConfig config = const HtmlRenderConfig(),
   TextDirection textDirection = TextDirection.ltr,
+  Brightness brightness = Brightness.light,
 }) {
   if (!availableWidth.isFinite || availableWidth <= 0) {
     throw ArgumentError.value(
@@ -84,6 +87,12 @@ HtmlDocumentInsetsEstimate estimateHtmlDocumentInsets(
       stylesheet: document.stylesheet,
       rootStyle: rootStyle,
       availableWidth: availableWidth,
+      brightness: resolveEmailColorPolicy(
+        document,
+        width: availableWidth,
+        config: config,
+        brightness: brightness,
+      ).brightness,
     ),
   ).element(document.root, rootStyle, availableWidth).estimate;
 }

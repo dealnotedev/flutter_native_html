@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../analysis/email_color_policy.dart';
 import '../analysis/html_document_insets.dart';
 import '../config/html_render_config.dart';
+import '../css/email_color_transform.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import '../parsing/html_email_parser.dart';
@@ -57,6 +59,7 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
   double? _renderedWidth;
   HtmlRenderConfig? _renderedConfig;
   Color? _renderedRootColor;
+  Brightness? _renderedBrightness;
   String? _renderedFontFamily;
   bool _contentRejected = false;
 
@@ -145,17 +148,8 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
 
     final ambient = DefaultTextStyle.of(context).style;
     final rootFontFamily = config.defaultFontFamily ?? ambient.fontFamily;
-    final rootStyle = HtmlStyle(
-      textDirection: Directionality.of(context),
-      fontSize: config.baseFontSize,
-      color:
-          config.defaultColor ??
-          ambient.color ??
-          Theme.of(context).textTheme.bodyMedium?.color ??
-          const Color(0xFF000000),
-      fontFamilies: rootFontFamily != null ? [rootFontFamily] : null,
-      lineHeight: 1.35,
-    );
+    final brightness = Theme.of(context).brightness;
+    final textDirection = Directionality.of(context);
 
     // Resolve against the actual available width so responsive emails adapt:
     // `@media (max-width: N)` rules apply when the layout is narrower than N.
@@ -167,14 +161,31 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
         if (_rendered != null &&
             _renderedWidth == width &&
             identical(_renderedConfig, config) &&
-            _renderedRootColor == rootStyle.color &&
+            _renderedRootColor == config.defaultColor &&
+            _renderedBrightness == brightness &&
             _renderedFontFamily == rootFontFamily) {
           return _rendered!;
         }
+        final colors = resolveEmailColorPolicy(
+          parsed,
+          width: width,
+          config: config,
+          brightness: brightness,
+        );
+        final rootStyle = HtmlStyle(
+          textDirection: textDirection,
+          fontSize: config.baseFontSize,
+          color: config.defaultColor ?? colors.text,
+          fontFamilies: rootFontFamily != null ? [rootFontFamily] : null,
+          lineHeight: 1.35,
+        );
         final resolver = StyleResolver(
           stylesheet: parsed.stylesheet,
           rootStyle: rootStyle,
           availableWidth: width,
+          brightness: colors.brightness,
+          canvasColor: colors.canvas,
+          colorTransform: colors.adapt ? const EmailColorTransform() : null,
         );
 
         // Rebuild the tree; release recognizers from the previous build first.
@@ -202,10 +213,20 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
         if (config.enableTextSelection) {
           rendered = SelectionArea(child: rendered);
         }
+        var canvas = colors.canvas;
+        final html = parsed.root.parent;
+        if (html != null) {
+          final background = resolver
+              .resolve(html, rootStyle.inheritedOnly())
+              .backgroundColor;
+          if (background != null) canvas = Color.alphaBlend(background, canvas);
+        }
+        rendered = ColoredBox(color: canvas, child: rendered);
         _rendered = rendered;
         _renderedWidth = width;
         _renderedConfig = config;
-        _renderedRootColor = rootStyle.color;
+        _renderedRootColor = config.defaultColor;
+        _renderedBrightness = brightness;
         _renderedFontFamily = rootFontFamily;
         return rendered;
       },
@@ -219,7 +240,8 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
         parsed,
         availableWidth: width,
         config: config,
-        textDirection: rootStyle.textDirection ?? TextDirection.ltr,
+        textDirection: textDirection,
+        brightness: brightness,
       ),
       child: layout,
     );

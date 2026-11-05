@@ -14,7 +14,9 @@ import 'sample_emails.dart';
 /// Showcase screen for [HtmlEmailView]: pick a sample email, toggle remote
 /// image loading, and see link/image taps surfaced as snackbars.
 class EmailDemoWidget extends StatefulWidget {
-  const EmailDemoWidget({super.key});
+  const EmailDemoWidget({super.key, this.onBrightnessChanged});
+
+  final ValueChanged<Brightness>? onBrightnessChanged;
 
   @override
   State<EmailDemoWidget> createState() => _EmailDemoWidgetState();
@@ -25,6 +27,7 @@ class _EmailDemoWidgetState extends State<EmailDemoWidget> {
   int _selected = 0;
   bool _allowRemoteImages = false;
   bool _fitToWidth = true;
+  HtmlEmailColorMode _colorMode = HtmlEmailColorMode.auto;
   bool _isDraggingEml = false;
 
   /// HTML loaded from disk; when set it takes precedence over the samples.
@@ -217,6 +220,7 @@ class _EmailDemoWidgetState extends State<EmailDemoWidget> {
       inlineAttachments: _inlineImages,
     ),
     fitToWidth: _fitToWidth,
+    colorMode: _colorMode,
     onLinkTap: (url, _) => _toast('Link tapped: $url'),
     onImageTap: (src, _) => _toast('Image tapped: $src'),
     blockedImageBuilder: _buildBlockedImage,
@@ -280,29 +284,82 @@ class _EmailDemoWidgetState extends State<EmailDemoWidget> {
             icon: const Icon(Icons.folder_open),
             onPressed: _openFile,
           ),
-          Row(
-            children: [
-              const Text('Remote img', style: TextStyle(fontSize: 12)),
-              Switch(
-                value: _allowRemoteImages,
-                onChanged: (v) => setState(() => _allowRemoteImages = v),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              const Text('Fit width', style: TextStyle(fontSize: 12)),
-              Switch(
-                value: _fitToWidth,
-                onChanged: (v) => setState(() => _fitToWidth = v),
-              ),
-            ],
+          IconButton(
+            tooltip: 'Toggle app theme',
+            icon: Icon(
+              Theme.of(context).brightness == Brightness.dark
+                  ? Icons.light_mode_outlined
+                  : Icons.dark_mode_outlined,
+            ),
+            onPressed: widget.onBrightnessChanged == null
+                ? null
+                : () => widget.onBrightnessChanged!(
+                    Theme.of(context).brightness == Brightness.dark
+                        ? Brightness.light
+                        : Brightness.dark,
+                  ),
           ),
         ],
       ),
       body: Column(
         children: [
           _buildSamplePicker(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Wrap(
+              spacing: 16,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Message: '),
+                    DropdownButton<HtmlEmailColorMode>(
+                      key: const ValueKey('message-color-mode'),
+                      value: _colorMode,
+                      items: const [
+                        DropdownMenuItem(
+                          value: HtmlEmailColorMode.auto,
+                          child: Text('Auto'),
+                        ),
+                        DropdownMenuItem(
+                          value: HtmlEmailColorMode.original,
+                          child: Text('Original'),
+                        ),
+                        DropdownMenuItem(
+                          value: HtmlEmailColorMode.dark,
+                          child: Text('Dark'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) setState(() => _colorMode = value);
+                      },
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Remote img'),
+                    Switch(
+                      value: _allowRemoteImages,
+                      onChanged: (v) => setState(() => _allowRemoteImages = v),
+                    ),
+                  ],
+                ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Fit width'),
+                    Switch(
+                      value: _fitToWidth,
+                      onChanged: (v) => setState(() => _fitToWidth = v),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
           const Divider(height: 1),
           Expanded(
             child: _buildDropTarget(

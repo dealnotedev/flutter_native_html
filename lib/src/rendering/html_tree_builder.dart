@@ -369,21 +369,24 @@ class HtmlTreeBuilder {
     HtmlStyle inherited,
     dom.Element? parent,
   ) {
-    const defaultBlue = Color(0xFF1155CC);
+    final defaultBlue = _resolver.defaultLinkColorFor(
+      parent,
+      autoDetected: true,
+    );
 
     final cfg = config.autoLinkColor;
     if (cfg != null) {
       return base.copyWith(
-        color: cfg,
+        color: _resolver.readableColor(cfg, parent),
         decoration: TextDecoration.underline,
-        decorationColor: cfg,
+        decorationColor: _resolver.readableColor(cfg, parent),
       );
     }
     if (inherited.pointerEventsNone ?? false) {
       return base.copyWith(
-        color: defaultBlue,
+        color: _resolver.readableColor(defaultBlue, parent),
         decoration: TextDecoration.underline,
-        decorationColor: defaultBlue,
+        decorationColor: _resolver.readableColor(defaultBlue, parent),
       );
     }
 
@@ -413,7 +416,9 @@ class HtmlTreeBuilder {
       if (authorDecoration == TextDecoration.none && !hasColor) color = null;
     }
 
-    final resolved = color ?? base.color;
+    final resolved = color == null
+        ? base.color
+        : _resolver.readableColor(color, parent);
     return base.copyWith(
       color: resolved,
       decoration: decoration,
@@ -427,7 +432,7 @@ class HtmlTreeBuilder {
   Map<String, String> _anchorAuthorDeclarations(dom.Element? parent) {
     final anchor = dom.Element.tag('a');
     if (parent != null) anchor.parentNode = parent;
-    return _resolver.sheetDeclarationsFor(anchor).values;
+    return _resolver.resolvedSheetDeclarationsFor(anchor);
   }
 
   static TextDecoration? _authorDecoration(String? value) {

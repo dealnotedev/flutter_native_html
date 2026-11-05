@@ -6,6 +6,8 @@ import 'css_declaration_mapper.dart';
 import 'css_length.dart';
 import 'css_parser.dart';
 import 'css_stylesheet.dart';
+import 'css_variables.dart';
+import 'email_color_transform.dart';
 import 'html_style.dart';
 
 /// Runs the CSS cascade for a single element.
@@ -18,14 +20,21 @@ class StyleResolver {
     required this.stylesheet,
     required this.rootStyle,
     this.availableWidth = double.infinity,
+    this.brightness = Brightness.light,
+    this.canvasColor = const Color(0xffffffff),
+    this.colorTransform,
   }) : rootFontSize = rootStyle.resolvedFontSize;
 
   final CssStylesheet stylesheet;
   final HtmlStyle rootStyle;
   final double rootFontSize;
+  final Brightness brightness;
+  final Color canvasColor;
+  final EmailColorTransform? colorTransform;
 
   /// The width (logical px) the email is being laid out at. Used to evaluate
-  /// `@media (max-width/min-width)` queries so responsive emails adapt.
+  /// width media queries so responsive emails adapt. Appearance is evaluated
+  /// independently using [brightness].
   final double availableWidth;
 
   /// Author-stylesheet declarations for [element] at the current
@@ -35,11 +44,110 @@ class StyleResolver {
     element,
     () => stylesheet.isEmpty
         ? CssDecls.empty
-        : stylesheet.declarationsFor(element, availableWidth),
+        : stylesheet.declarationsFor(
+            element,
+            availableWidth,
+            brightness: brightness,
+          ),
   );
 
   final _sheetCache = <dom.Element, CssDecls>{};
   final _inlineCache = <dom.Element, CssDecls>{};
+  final _declarationCache = <dom.Element, Map<String, String>>{};
+  final _variables = <dom.Element, CssVariables>{};
+  final _backgrounds = <dom.Element, Color>{};
+  final _imageBackgrounds = <dom.Element, bool>{};
+  final _sourceStyles = <dom.Element, HtmlStyle>{};
+  late final _sourceResolver = StyleResolver(
+    stylesheet: stylesheet,
+    rootStyle: rootStyle.merge(const HtmlStyle(color: Color(0xff000000))),
+    availableWidth: availableWidth,
+    brightness: brightness,
+  );
+
+  HtmlStyle _sourceStyleFor(dom.Element element) =>
+      _sourceStyles.putIfAbsent(element, () {
+        final inherited = element.parent == null
+            ? _sourceResolver.rootStyle
+            : _sourceStyleFor(element.parent!);
+        return _sourceResolver.resolve(element, inherited.inheritedOnly());
+      });
+
+  CssDecls _inlineFor(dom.Element element) => _inlineCache.putIfAbsent(
+    element,
+    () => CssParser.parseInlineDeclarations(element.attributes['style'] ?? ''),
+  );
+
+  Map<String, String> _cascade(dom.Element element) =>
+      _declarationCache.putIfAbsent(element, () {
+        final sheet = sheetDeclarationsFor(element);
+        final inline = _inlineFor(element);
+        final values = <String, String>{};
+        for (final important in [false, true]) {
+          for (final source in [sheet, inline]) {
+            for (final entry in source.values.entries) {
+              if (source.important.contains(entry.key) != important) continue;
+              values.remove(entry.key);
+              values[entry.key] = entry.value;
+            }
+          }
+        }
+        return values;
+      });
+
+  CssVariables _variablesFor(dom.Element element) => _variables.putIfAbsent(
+    element,
+    () => CssVariables(
+      Map.fromEntries(
+        _cascade(element).entries.where((e) => e.key.startsWith('--')),
+      ),
+      element.parent == null ? null : _variablesFor(element.parent!),
+    ),
+  );
+
+  /// Substitution is done after the cascade, against computed inherited tokens.
+  Map<String, String> computedDeclarationsFor(dom.Element element) {
+    final variables = _variablesFor(element);
+    return {
+      for (final entry in _cascade(element).entries)
+        if (!entry.key.startsWith('--'))
+          if (variables.resolve(entry.value) case final String value)
+            entry.key: value,
+    };
+  }
+
+  Map<String, String> resolvedSheetDeclarationsFor(dom.Element element) {
+    final variables = _variablesFor(element);
+    return {
+      for (final entry in sheetDeclarationsFor(element).values.entries)
+        if (variables.resolve(entry.value) case final String value)
+          entry.key: value,
+    };
+  }
+
+  String? colorSchemeFor(dom.Element element) {
+    final own = computedDeclarationsFor(element)['color-scheme'];
+    if (own != null && own != 'inherit' && own != 'unset') return own;
+    return element.parent == null ? null : colorSchemeFor(element.parent!);
+  }
+
+  Color readableColor(Color color, dom.Element? element) =>
+      (_imageBackgrounds[element] ?? false)
+      ? color
+      : colorTransform?.foreground(
+              color,
+              _backgrounds[element] ?? canvasColor,
+            ) ??
+            color;
+
+  Color defaultLinkColorFor(
+    dom.Element? element, {
+    bool autoDetected = false,
+  }) => (_backgrounds[element] ?? canvasColor).computeLuminance() < 0.18
+      ? const Color(0xff8ab4f8)
+      : autoDetected
+      ? const Color(0xff1155cc)
+      : const Color(0xff1a0dab);
 
   /// Per-instance memo of resolved styles. A [StyleResolver] is created fresh
   /// per build at a fixed [availableWidth], so an element always resolves to the
@@ -52,6 +160,14 @@ class StyleResolver {
   /// Computes the full style for [element] given its parent's [inherited]
   /// (inherited-only) style.
   HtmlStyle resolve(dom.Element element, HtmlStyle inherited) {
+    // The public rendering root is body, but :root/html still supplies inherited
+    // typography and tokens. Never mutate or reparent the prepared document.
+    if (element.localName == 'body' && element.parent?.localName == 'html') {
+      inherited = resolve(
+        element.parent!,
+        rootStyle.inheritedOnly(),
+      ).inheritedOnly();
+    }
     final cached = _cache[element];
     if (cached != null && identical(cached.inherited, inherited)) {
       return cached.result;
@@ -60,12 +176,7 @@ class StyleResolver {
     final parentFontSize = inherited.fontSize ?? rootFontSize;
 
     final sheet = sheetDeclarationsFor(element);
-    final inline = _inlineCache.putIfAbsent(element, () {
-      final raw = element.attributes['style'];
-      return raw == null
-          ? CssDecls.empty
-          : CssParser.parseInlineDeclarations(raw);
-    });
+    final inline = _inlineFor(element);
     final ua = _userAgentStyle(tag, parentFontSize, inherited);
     final parentCellAlignment = _parentCellAlignment(element, tag);
     final presentational = _presentationalStyle(
@@ -98,19 +209,7 @@ class StyleResolver {
         .merge(ua)
         .merge(presentational)
         .merge(anchor);
-    final declarations = <String, String>{};
-    void apply(CssDecls source, {required bool important}) {
-      for (final entry in source.values.entries) {
-        if (source.important.contains(entry.key) != important) continue;
-        declarations.remove(entry.key);
-        declarations[entry.key] = entry.value;
-      }
-    }
-
-    apply(sheet, important: false);
-    apply(inline, important: false);
-    apply(sheet, important: true);
-    apply(inline, important: true);
+    final declarations = computedDeclarationsFor(element);
     // Preserve the email-specific enclosing-anchor colour priority.
     if (inherited.anchorColor != null &&
         !inline.values.containsKey('color') &&
@@ -119,7 +218,7 @@ class StyleResolver {
     }
     // Compute related values together: line-height and letter-spacing depend
     // on the final font-size even when they originate in different layers.
-    final result = base.merge(
+    var result = base.merge(
       CssDeclarationMapper.map(
         declarations,
         parentFontSize: parentFontSize,
@@ -132,6 +231,45 @@ class StyleResolver {
         baseBorders: base.borders,
       ),
     );
+    final hasImage =
+        result.backgroundImage != null ||
+        (_imageBackgrounds[element.parent] ?? false);
+    _imageBackgrounds[element] = hasImage;
+    if (colorTransform != null && hasImage) {
+      // Bitmap contrast is unknown. Preserve source colors across its backdrop.
+      final source = _sourceStyleFor(element);
+      result = result.merge(
+        HtmlStyle(
+          color: source.color,
+          backgroundColor:
+              source.backgroundColor ??
+              (result.backgroundImage == null
+                  ? null
+                  : _sourceResolver._backgrounds[element]),
+          textDecorationColor: source.textDecorationColor,
+          borders: source.borders,
+        ),
+      );
+    }
+    if (colorTransform != null && !hasImage) {
+      final surface = result.backgroundColor;
+      if (surface != null) {
+        result = result.merge(
+          HtmlStyle(backgroundColor: colorTransform!.surface(surface)),
+        );
+      }
+    }
+    final background = Color.alphaBlend(
+      result.backgroundColor ?? const Color(0x00000000),
+      _backgrounds[element.parent] ?? canvasColor,
+    );
+    _backgrounds[element] = background;
+    if (tag == 'a' && !declarations.containsKey('color')) {
+      result = result.merge(HtmlStyle(color: defaultLinkColorFor(element)));
+    }
+    if (colorTransform != null && !hasImage) {
+      result = colorTransform!.apply(result, background);
+    }
     _cache[element] = (inherited: inherited, result: result);
     return result;
   }

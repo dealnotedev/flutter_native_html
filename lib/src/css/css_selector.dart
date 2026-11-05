@@ -56,6 +56,7 @@ class CssCompoundSelector {
     this.firstChild = false,
     this.lastChild = false,
     this.link = false,
+    this.root = false,
     this.nthChild,
     this.not,
   }) : classes = classes ?? <String>{},
@@ -68,10 +69,12 @@ class CssCompoundSelector {
   final bool firstChild;
   final bool lastChild;
   final bool link;
+  final bool root;
   final String? nthChild;
   final CssCompoundSelector? not;
 
   bool matches(dom.Element element) {
+    if (root && element.parent != null) return false;
     if (tag != null && tag != '*') {
       if ((element.localName ?? '').toLowerCase() != tag) return false;
     }
@@ -162,6 +165,7 @@ class CssCompoundSelector {
         (firstChild ? 1 : 0) +
         (lastChild ? 1 : 0) +
         (link ? 1 : 0) +
+        (root ? 1 : 0) +
         (nthChild == null ? 0 : 1) +
         (not?.specificity.$2 ?? 0),
     ((tag != null && tag != '*') ? 1 : 0) + (not?.specificity.$3 ?? 0),
@@ -295,12 +299,19 @@ class CssSelector {
     var firstChild = false;
     var lastChild = false;
     var link = false;
+    var root = false;
     String? nthChild;
     CssCompoundSelector? not;
     rest = rest.replaceAllMapped(_pseudoPattern, (match) {
       final name = match.group(1)!.toLowerCase();
       final argument = match.group(2);
-      if (name == 'first-child') {
+      if (name == 'root') {
+        if (argument != null) {
+          failed = true;
+        } else {
+          root = true;
+        }
+      } else if (name == 'first-child') {
         firstChild = true;
       } else if (name == 'last-child') {
         lastChild = true;
@@ -352,7 +363,12 @@ class CssSelector {
       if (consumed != rest.length) return null; // stray unsupported chars
     }
     final hasPseudo =
-        firstChild || lastChild || link || nthChild != null || not != null;
+        firstChild ||
+        lastChild ||
+        link ||
+        root ||
+        nthChild != null ||
+        not != null;
     if (tag == null &&
         id == null &&
         classes.isEmpty &&
@@ -368,6 +384,7 @@ class CssSelector {
       firstChild: firstChild,
       lastChild: lastChild,
       link: link,
+      root: root,
       nthChild: nthChild,
       not: not,
     );
@@ -375,7 +392,7 @@ class CssSelector {
 
   static final RegExp _attrBlock = RegExp(r'\[([^\]]*)\]');
   static final RegExp _pseudoPattern = RegExp(
-    r':(first-child|last-child|nth-child|not|link)(?![\w-])(?:\(([^()]*)\))?',
+    r':(first-child|last-child|nth-child|not|link|root)(?![\w-])(?:\(([^()]*)\))?',
     caseSensitive: false,
   );
   static final RegExp _attrPattern = RegExp(

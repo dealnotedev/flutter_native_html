@@ -24,6 +24,19 @@ typedef HtmlBlockedImageBuilder =
 
 const Object _unsetConfigValue = Object();
 
+/// How the message body responds to the application's appearance.
+enum HtmlEmailColorMode {
+  /// Use author dark styles, adapt simple text mail, preserve complex mail.
+  auto,
+
+  /// Use the author's light presentation with a white canvas and dark text.
+  original,
+
+  /// Request author dark styles, or heuristically adapt the message's colors.
+  /// Image pixels are never inverted. Original mode remains the escape hatch.
+  dark,
+}
+
 /// Immutable configuration for [HtmlEmailView].
 ///
 /// Holds the rendering policy (image loading, link handling), styling defaults,
@@ -41,6 +54,8 @@ class HtmlRenderConfig {
     this.defaultColor,
     this.defaultFontFamily,
     this.linkColor,
+    this.colorMode = HtmlEmailColorMode.auto,
+    this.brightness,
     this.autoLinkify = true,
     this.autoLinkColor,
     this.maxImageWidth,
@@ -98,8 +113,9 @@ class HtmlRenderConfig {
   /// Root font size (logical px) used as the basis for `em`/`%` and headings.
   final double baseFontSize;
 
-  /// Default text color. When null it is taken from the ambient
-  /// [DefaultTextStyle]/theme at build time.
+  /// Default text color. Null selects dark text on the original light canvas
+  /// or light text in dark mode. Explicit author colors still win the cascade;
+  /// heuristic adaptation may adjust colors to maintain contrast.
   final Color? defaultColor;
 
   /// Default font family applied to the root when CSS doesn't specify one.
@@ -107,6 +123,13 @@ class HtmlRenderConfig {
 
   /// Overrides the default link color (the UA blue) when set.
   final Color? linkColor;
+
+  /// Body appearance, independent of the Flutter application's theme.
+  final HtmlEmailColorMode colorMode;
+
+  /// Preferred appearance in auto mode. Null follows Theme.of(context).
+  /// Original and dark modes explicitly select light and dark respectively.
+  final Brightness? brightness;
 
   /// Auto-detects bare email addresses and URLs in text and turns them into
   /// tappable links (like Gmail). Matches on the host via [onLinkTap].
@@ -179,6 +202,8 @@ class HtmlRenderConfig {
     Object? defaultColor = _unsetConfigValue,
     Object? defaultFontFamily = _unsetConfigValue,
     Object? linkColor = _unsetConfigValue,
+    HtmlEmailColorMode? colorMode,
+    Object? brightness = _unsetConfigValue,
     bool? autoLinkify,
     Object? autoLinkColor = _unsetConfigValue,
     Object? maxImageWidth = _unsetConfigValue,
@@ -216,6 +241,10 @@ class HtmlRenderConfig {
       linkColor: identical(linkColor, _unsetConfigValue)
           ? this.linkColor
           : linkColor as Color?,
+      colorMode: colorMode ?? this.colorMode,
+      brightness: identical(brightness, _unsetConfigValue)
+          ? this.brightness
+          : brightness as Brightness?,
       autoLinkify: autoLinkify ?? this.autoLinkify,
       autoLinkColor: identical(autoLinkColor, _unsetConfigValue)
           ? this.autoLinkColor

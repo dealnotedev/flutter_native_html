@@ -1,3 +1,5 @@
+import 'dart:ui' show Brightness;
+
 import 'css_selector.dart';
 import 'css_stylesheet.dart';
 import 'css_declaration_expander.dart';
@@ -6,8 +8,8 @@ import 'css_declaration_expander.dart';
 ///
 /// It tokenizes only as much as it needs to: it strips comments, splits rule
 /// blocks brace-aware, expands comma-separated selector groups, and parses
-/// `prop: value` declarations. `@media (max-width/min-width)` queries are kept
-/// and evaluated against the render width; other at-rules (`@font-face`,
+/// `prop: value` declarations. Width and `prefers-color-scheme` media queries
+/// (including nested queries) are evaluated at render time; other at-rules (`@font-face`,
 /// `@import`, …) are skipped.
 ///
 /// It is deliberately hidden behind [CssStylesheet]/[parseInlineDeclarations]
@@ -31,8 +33,10 @@ class CssParser {
     String css,
     List<CssRule> rules,
     _Counter order,
-    CssMediaQuery? media,
-  ) {
+    CssMediaQuery? media, [
+    int depth = 0,
+  ]) {
+    if (depth >= 32) return;
     var i = 0;
     while (i < css.length) {
       final braceOpen = css.indexOf('{', i);
@@ -52,10 +56,15 @@ class CssParser {
 
       if (prelude.startsWith('@')) {
         final lower = prelude.toLowerCase();
-        if (media == null && lower.startsWith('@media')) {
-          // Parse the nested rules under the media condition. (Nested @media is
-          // not expected; media is only applied at the top level.)
-          _parseRules(body, rules, order, _parseMedia(prelude));
+        if (lower.startsWith('@media')) {
+          final condition = _parseMedia(prelude);
+          _parseRules(
+            body,
+            rules,
+            order,
+            media?.and(condition) ?? condition,
+            depth + 1,
+          );
         }
         // Other at-rules (@font-face, @supports, @keyframes, …) are skipped.
         i = braceClose + 1;
@@ -84,7 +93,7 @@ class CssParser {
 
   /// Parses an `@media` prelude into a [CssMediaQuery]. The prelude is a
   /// comma-separated list of alternatives (CSS treats the comma as OR); each
-  /// alternative is an AND of `(...)` features. Recognizes width features
+  /// alternative is an AND of `(...)` features. Recognizes color schemes and width
   /// (`max-width`/`min-width` and their deprecated `*-device-width` forms,
   /// which we treat as the viewport width); any other feature (orientation,
   /// hover, …) or a `print` type makes THAT alternative non-applicable, so it
@@ -113,8 +122,20 @@ class CssParser {
     }
     double? maxWidth;
     double? minWidth;
+    Brightness? brightness;
     var applicable = true;
     for (final group in _anyFeature.allMatches(prelude)) {
+      final colorScheme = _colorSchemeFeature.firstMatch(
+        group.group(1)!.trim(),
+      );
+      if (colorScheme != null) {
+        final requested = colorScheme.group(1)!.toLowerCase() == 'dark'
+            ? Brightness.dark
+            : Brightness.light;
+        if (brightness != null && brightness != requested) applicable = false;
+        brightness = requested;
+        continue;
+      }
       final m = _widthFeature.firstMatch(group.group(1)!.trim());
       if (m == null) {
         applicable = false; // a feature we don't understand
@@ -138,11 +159,16 @@ class CssParser {
     return CssMediaClause(
       minWidth: minWidth,
       maxWidth: maxWidth,
+      brightness: brightness,
       applicable: applicable,
     );
   }
 
   static final RegExp _anyFeature = RegExp(r'\(([^)]*)\)');
+  static final RegExp _colorSchemeFeature = RegExp(
+    r'^prefers-color-scheme\s*:\s*(light|dark)$',
+    caseSensitive: false,
+  );
   static final RegExp _widthFeature = RegExp(
     r'^(max-width|min-width|max-device-width|min-device-width)\s*:\s*([0-9.]+)\s*(px|em|rem)$',
     caseSensitive: false,
@@ -156,7 +182,8 @@ class CssParser {
     for (final part in _splitDeclarations(text)) {
       final colon = part.indexOf(':');
       if (colon <= 0) continue;
-      final prop = part.substring(0, colon).trim().toLowerCase();
+      final name = part.substring(0, colon).trim();
+      final prop = name.startsWith('--') ? name : name.toLowerCase();
       var value = part.substring(colon + 1).trim();
       if (prop.isEmpty || value.isEmpty) continue;
       final hadImportant = _importantPattern.hasMatch(value);

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add independent Auto / Original / Dark email color modes. Honor author
+  color-scheme metadata and media queries; adapt simple mail conservatively,
+  preserve complex mail in Auto, and keep image pixels unchanged in manual Dark.
+  Supply a safe canvas/text pair independently of the host's text theme.
+- Resolve inherited, case-sensitive CSS custom properties and :root styles,
+  including theme-dependent color tokens. Keep layout analysis consistent with
+  the selected appearance and add separate theme controls to the example app.
+
 - Add `hasNoHtmlPageLayout` to conservatively identify HTML with content
   formatting but no detected page layout, using the renderer's CSS cascade.
   Keep local buttons, avatars and data tables separate from page scaffolding;

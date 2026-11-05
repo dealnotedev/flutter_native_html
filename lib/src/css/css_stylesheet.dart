@@ -1,3 +1,5 @@
+import 'dart:ui' show Brightness;
+
 import 'package:html/dom.dart' as dom;
 
 import 'css_selector.dart';
@@ -7,7 +9,7 @@ import 'css_selector.dart';
 class CssDecls {
   const CssDecls(this.values, this.important);
 
-  /// property -> value, lower-cased property names.
+  /// property -> value; custom-property names retain their case.
   final Map<String, String> values;
 
   /// Properties (subset of [values] keys) declared `!important`.
@@ -20,8 +22,8 @@ class CssDecls {
 
 /// A parsed `@media` condition — a comma-separated list of alternatives that
 /// matches when ANY alternative matches (CSS treats the comma as OR). Each
-/// alternative is an AND of width features ([CssMediaClause]); only width
-/// features are understood. An alternative using a feature we don't recognise is
+/// alternative is an AND of width and color-scheme features ([CssMediaClause]).
+/// An alternative using a feature we don't recognise is
 /// marked non-applicable (it never matches), but its siblings in the list still
 /// can — so the very common `(max-device-width: 480px), (max-width: 480px)`
 /// Gmail/Outlook query still activates on the `max-width` branch.
@@ -32,22 +34,63 @@ class CssMediaQuery {
 
   /// Whether any alternative matches a render [width] (logical px). An empty
   /// list never matches.
-  bool matches(double width) => clauses.any((c) => c.matches(width));
+  bool matches(double width, {Brightness brightness = Brightness.light}) =>
+      clauses.any((c) => c.matches(width, brightness: brightness));
+
+  /// Conjoin nested media queries without losing comma-separated alternatives.
+  CssMediaQuery and(CssMediaQuery other) {
+    if (clauses.length * other.clauses.length > 64) {
+      return const CssMediaQuery([]);
+    }
+    return CssMediaQuery([
+      for (final a in clauses)
+        for (final b in other.clauses)
+          CssMediaClause(
+            minWidth: _max(a.minWidth, b.minWidth),
+            maxWidth: _min(a.maxWidth, b.maxWidth),
+            brightness: a.brightness ?? b.brightness,
+            applicable:
+                a.applicable &&
+                b.applicable &&
+                (a.brightness == null ||
+                    b.brightness == null ||
+                    a.brightness == b.brightness),
+          ),
+    ]);
+  }
+
+  static double? _min(double? a, double? b) => a == null
+      ? b
+      : b == null
+      ? a
+      : (a < b ? a : b);
+  static double? _max(double? a, double? b) => a == null
+      ? b
+      : b == null
+      ? a
+      : (a > b ? a : b);
 }
 
-/// One alternative within a [CssMediaQuery]: an AND of width features.
+/// One alternative: an AND of width and color-scheme features.
 class CssMediaClause {
-  const CssMediaClause({this.minWidth, this.maxWidth, this.applicable = true});
+  const CssMediaClause({
+    this.minWidth,
+    this.maxWidth,
+    this.brightness,
+    this.applicable = true,
+  });
 
   final double? minWidth;
   final double? maxWidth;
+  final Brightness? brightness;
 
   /// False when the alternative uses a media feature we don't understand, so it
   /// can never match (the safe default for a static render).
   final bool applicable;
 
-  bool matches(double width) {
+  bool matches(double width, {Brightness brightness = Brightness.light}) {
     if (!applicable) return false;
+    if (this.brightness != null && this.brightness != brightness) return false;
     if (maxWidth != null && width > maxWidth!) return false;
     if (minWidth != null && width < minWidth!) return false;
     return true;
@@ -80,8 +123,7 @@ class CssRule {
 
 /// An author stylesheet (collected from all `<style>` blocks). Resolves the
 /// winning declarations for an element by cascade (specificity, then order),
-/// honoring `@media (max-width/min-width)` against the current render width and
-/// letting `!important` declarations win.
+/// honoring width/color-scheme media conditions and `!important` declarations.
 class CssStylesheet {
   CssStylesheet(this.rules) {
     for (final rule in rules) {
@@ -117,20 +159,17 @@ class CssStylesheet {
   /// Returns the cascaded declarations matching [element] at render [width].
   /// Rules behind a `@media` query are included only when it matches [width].
   /// `!important` declarations override normal ones regardless of source.
-  CssDecls declarationsFor(dom.Element element, double width) {
+  CssDecls declarationsFor(
+    dom.Element element,
+    double width, {
+    Brightness brightness = Brightness.light,
+  }) {
     final matched = <_Matched>[];
-    final candidates = <CssRule>{..._universal};
-    final id = element.id;
-    if (id.isNotEmpty) candidates.addAll(_byId[id] ?? const []);
-    candidates.addAll(
-      _byTag[(element.localName ?? '').toLowerCase()] ?? const [],
-    );
-    for (final className in element.classes) {
-      candidates.addAll(_byClass[className] ?? const []);
-    }
-    for (final rule in candidates) {
+    for (final rule in _candidatesFor(element)) {
       final media = rule.media;
-      if (media != null && !media.matches(width)) continue;
+      if (media != null && !media.matches(width, brightness: brightness)) {
+        continue;
+      }
       if (rule.selector.matches(element)) matched.add(_Matched(rule));
     }
     if (matched.isEmpty) return CssDecls.empty;
@@ -149,9 +188,40 @@ class CssStylesheet {
         }
       });
     }
-    // Important declarations win over normal ones.
-    final values = {...normal, ...important};
-    return CssDecls(values, important.keys.toSet());
+    return CssDecls({...normal, ...important}, important.keys.toSet());
+  }
+
+  /// A dark-only rule must match real content and affect a supported theme
+  /// property. An unused selector or an empty marker is not a dark theme.
+  bool hasDarkStylesFor(dom.Element element, double width) =>
+      _candidatesFor(element).any((rule) {
+        final media = rule.media;
+        return media != null &&
+            media.matches(width, brightness: Brightness.dark) &&
+            !media.matches(width, brightness: Brightness.light) &&
+            rule.selector.matches(element) &&
+            rule.declarations.values.keys.any(
+              (p) =>
+                  p.startsWith('--') ||
+                  p == 'color' ||
+                  p.startsWith('background') ||
+                  p == 'display' ||
+                  p == 'visibility' ||
+                  p.startsWith('border'),
+            );
+      });
+
+  Set<CssRule> _candidatesFor(dom.Element element) {
+    final candidates = <CssRule>{..._universal};
+    final id = element.id;
+    if (id.isNotEmpty) candidates.addAll(_byId[id] ?? const []);
+    candidates.addAll(
+      _byTag[(element.localName ?? '').toLowerCase()] ?? const [],
+    );
+    for (final className in element.classes) {
+      candidates.addAll(_byClass[className] ?? const []);
+    }
+    return candidates;
   }
 
   static int _compare(_Matched a, _Matched b) {

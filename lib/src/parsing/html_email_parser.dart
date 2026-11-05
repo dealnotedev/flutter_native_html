@@ -8,13 +8,17 @@ import 'html_sanitizer.dart';
 /// The outcome of parsing an email body: the sanitized DOM root to render plus
 /// the author stylesheet collected from all `<style>` blocks.
 class ParsedEmail {
-  ParsedEmail({required this.root, required this.stylesheet});
+  ParsedEmail({required this.root, required this.stylesheet, this.colorScheme});
 
   /// The element whose children should be rendered (usually `<body>`).
   /// Treat this DOM as immutable while sharing or displaying the document.
   /// The view caches preparation; mutations require a new ParsedEmail instance.
   final dom.Element root;
   final CssStylesheet stylesheet;
+
+  /// The head's color-scheme hint, including the legacy supported-color-schemes
+  /// spelling. It is data for rendering policy, never active HTML.
+  final String? colorScheme;
 }
 
 class HtmlContentLimitException implements Exception {
@@ -80,7 +84,20 @@ class HtmlEmailParser {
         document.createElement('body');
     sanitizer.sanitize(body);
 
-    return ParsedEmail(root: body, stylesheet: stylesheet);
+    String? colorScheme;
+    for (final meta
+        in document.head?.querySelectorAll('meta') ?? <dom.Element>[]) {
+      final name = meta.attributes['name']?.toLowerCase();
+      if (name == 'color-scheme' || name == 'supported-color-schemes') {
+        colorScheme = meta.attributes['content'];
+        if (name == 'color-scheme') break;
+      }
+    }
+    return ParsedEmail(
+      root: body,
+      stylesheet: stylesheet,
+      colorScheme: colorScheme,
+    );
   }
 
   CssStylesheet _collectStylesheet(dom.Document document) {

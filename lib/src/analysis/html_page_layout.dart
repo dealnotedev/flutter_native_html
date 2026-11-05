@@ -6,6 +6,7 @@ import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import '../parsing/html_email_parser.dart';
+import 'email_color_policy.dart';
 
 /// Whether an email appears to have content formatting but no page layout.
 ///
@@ -29,11 +30,13 @@ import '../parsing/html_email_parser.dart';
 /// [HtmlEmailParser.parse] for bounded parsing; reuse the same [ParsedEmail]
 /// for rendering, and recompute when the document, width or config changes.
 /// The host owns padding policy; this function does not change rendering.
+/// Pass the host's brightness for auto mode; config overrides take precedence.
 bool hasNoHtmlPageLayout(
   ParsedEmail document, {
   required double availableWidth,
   HtmlRenderConfig config = const HtmlRenderConfig(),
   TextDirection textDirection = TextDirection.ltr,
+  Brightness brightness = Brightness.light,
 }) {
   if (!availableWidth.isFinite || availableWidth <= 0) {
     throw ArgumentError.value(
@@ -53,6 +56,12 @@ bool hasNoHtmlPageLayout(
       stylesheet: document.stylesheet,
       rootStyle: rootStyle,
       availableWidth: availableWidth,
+      brightness: resolveEmailColorPolicy(
+        document,
+        width: availableWidth,
+        config: config,
+        brightness: brightness,
+      ).brightness,
     ),
   );
   final content = analyzer.visit(document.root, rootStyle, isRoot: true);

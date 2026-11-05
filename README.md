@@ -45,6 +45,48 @@ Untrusted inputs are bounded by `maxHtmlCharacters`, `maxDomNodes`,
 `maxCssCharacters`, and `maxCssRules`. The default resolver also caps encoded
 payloads and decoded image dimensions.
 
+### Message color modes
+
+```dart
+HtmlEmailView(
+  html: emailBody,
+  config: const HtmlRenderConfig(
+    colorMode: HtmlEmailColorMode.auto, // auto (default), original, dark
+    // brightness: Brightness.dark,    // optional override; otherwise follows Theme
+  ),
+)
+```
+
+`auto` follows the application's appearance. In dark appearance it uses the
+author's `prefers-color-scheme` styles or `color-scheme` declaration, including
+the head meta hint. Without an author theme it adapts simple text mail with
+neutral backgrounds. Tables, images, background images, saturated surfaces,
+sized layouts, and custom handlers conservatively keep their original colors.
+`color-scheme: only light` opts out of automatic adaptation.
+
+`original` always evaluates light media queries and supplies a white canvas
+with black default text, independently of the app theme. Author colors still
+win. `dark` requests author dark styles even in a light app; without an author
+theme it heuristically transforms surfaces, text, links, and borders. It aims
+for readable local contrast without changing layout or image pixels. Bitmap
+and gradient backdrops keep their source colors; transparent logos and unusual
+designs can still require Original mode. Custom handlers own their widget colors.
+
+The CSS subset supports `:root`, inherited, case-sensitive custom properties,
+`var()` references and fallbacks for color tokens, `!important`, and combined
+width/color-scheme media queries. Variable substitution and nested media are
+bounded. This does not add a browser CSS engine or Outlook/Gmail-specific theme
+attribute emulation. Switching modes never rewrites the source or prepared DOM.
+
+Default text color now comes from the message's light/dark palette rather than
+the ambient Flutter text color. Use `defaultColor` for an explicit host default.
+For pre-layout analysis, pass the host's `brightness` to
+`estimateHtmlDocumentInsets` / `hasNoHtmlPageLayout`, or set it in the config,
+so theme-specific visibility and spacing match the rendered document.
+
+The example app has separate app-theme and message-mode controls, plus an
+author-themed sample using CSS variables.
+
 ### Optional fallback side padding
 
 ```dart
@@ -216,7 +258,8 @@ links and auto-links, selectable text, tables with `colspan` and `rowspan`,
 responsive stacked columns, email-style floats, RTL, inline and CSS background
 images, box sizing, visibility/opacity/overflow clipping, white-space modes,
 `object-fit`, attribute/structural/sibling selectors, `!important`, and
-width-based `@media` rules using `px`, `em`, or `rem`.
+width-based `@media` rules using `px`, `em`, or `rem`, and
+`prefers-color-scheme` queries with inherited CSS color tokens.
 
 This remains an **email CSS** engine, not a browser. JavaScript, forms,
 iframe/plugin content, flex/grid, arbitrary positioning, generated content,

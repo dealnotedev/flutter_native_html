@@ -1,12 +1,55 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_native_html/src/css/css_parser.dart';
 import 'package:flutter_native_html/src/css/css_color.dart';
+import 'package:flutter_native_html/src/css/css_variables.dart';
 import 'package:flutter_native_html/src/css/html_style.dart';
 import 'package:flutter_native_html/src/css/style_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:html/parser.dart' as html_parser;
 
 void main() {
+  test(
+    'computed variables inherit values, preserve case and reject cycles',
+    () {
+      final parent = CssVariables({'--A': '#112233', '--alias': 'var(--A)'});
+      final child = CssVariables({'--A': '#445566'}, parent);
+      expect(child.resolve('var(--A)'), '#445566');
+      expect(child.resolve('var(--a, red)'), ' red');
+      expect(child.resolve('var(--alias)'), '#112233');
+      final cycle = CssVariables({
+        '--a': 'var(--b, red)',
+        '--b': 'var(--a, blue)',
+      });
+      expect(cycle.resolve('var(--a, green)'), ' green');
+      expect(cycle.resolve('var(--b, green)'), ' green');
+      final exponential = CssVariables({
+        '--v0': 'x',
+        for (var i = 1; i < 25; i++)
+          '--v$i': 'var(--v${i - 1})var(--v${i - 1})',
+      });
+      expect(exponential.resolve('var(--v24)'), isNull);
+    },
+  );
+
+  test('custom property cascade honors important and element inheritance', () {
+    final document = html_parser.parse('''
+      <style>:root{--Ink:red!important;--ink:green}body{--Ink:blue}
+      p{color:var(--Ink);background:var(--ink)}</style>
+      <p style="--Ink:purple!important;--Ink:black">Text</p>
+    ''');
+    final resolver = StyleResolver(
+      stylesheet: CssParser.parseStylesheet(
+        document.querySelector('style')!.text,
+      ),
+      rootStyle: const HtmlStyle(),
+    );
+    final style = resolver.resolve(
+      document.querySelector('p')!,
+      const HtmlStyle(),
+    );
+    expect(style.color, const Color(0xff800080));
+    expect(style.backgroundColor, const Color(0xff008000));
+  });
   for (final (value, expected) in <(String, Color?)>[
     ('var(--brand, rgb(97, 31, 105))', const Color(0xff611f69)),
     ('var(--brand, var(--backup, #611f69))', const Color(0xff611f69)),

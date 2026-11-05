@@ -13,7 +13,30 @@ const List<SampleEmail> kSampleEmails = [
   SampleEmail('Table layout (newsletter)', _table),
   SampleEmail('Images (inline + blocked)', _images),
   SampleEmail('Sanitization (script stripped)', _unsafe),
+  SampleEmail('Author light / dark theme', _themed),
 ];
+
+const _themed = '''
+<html><head>
+<meta name="color-scheme" content="light dark">
+<style>
+  :root { color-scheme: light dark; --surface: #ffffff; --text: #222222; --link: #1565c0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --surface: #18202a; --text: #e5edf5; --link: #92c5ff; }
+    .day { display: none !important; }
+    .night { display: block !important; }
+  }
+  body { background: var(--surface); color: var(--text); padding: 20px; }
+  a { color: var(--link); }
+  .night { display: none; }
+</style></head><body>
+  <h2>Your monthly update</h2>
+  <p class="day">The author's light theme is active.</p>
+  <p class="night">The author's dark theme is active.</p>
+  <p>This message supplies its own colors using CSS variables.</p>
+  <p><a href="https://example.com/report">Read the report</a></p>
+</body></html>
+''';
 
 const _basic = '''
 <h1>Welcome aboard 🎉</h1>
