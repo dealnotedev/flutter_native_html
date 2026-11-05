@@ -11,6 +11,7 @@ import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import 'css_border_decoration.dart';
+import 'css_border_radius.dart';
 import 'element_registry.dart';
 import 'html_build_result.dart';
 import 'html_render_context.dart';
@@ -1444,26 +1445,21 @@ class HtmlTreeBuilder {
     }
     content = _withBackgroundImage(content, style);
 
+    final requestedRadius = cssBorderRadius(style);
     final patternedBorder = style.borders == null
         ? null
         : CssBorderDecoration(
             borders: style.borders!,
-            borderRadius:
-                style.borderRadiusGeometry ??
-                (style.borderRadius != null
-                    ? BorderRadius.circular(style.borderRadius!)
-                    : null),
+            borderRadius: requestedRadius,
           );
     final hasPatternedBorder =
         patternedBorder?.hasVisiblePatternedSide ?? false;
     final hasDecoration =
-        background != null || border != null || hasPatternedBorder;
+        background != null ||
+        border != null ||
+        hasPatternedBorder ||
+        (requestedRadius != null && style.overflowHidden == true);
     // BoxDecoration only allows borderRadius with a uniform (or absent) border.
-    final requestedRadius =
-        style.borderRadiusGeometry ??
-        (style.borderRadius != null
-            ? BorderRadius.circular(style.borderRadius!)
-            : null);
     final clipNonuniformBorder =
         requestedRadius != null && border != null && !border.isUniform;
     final BorderRadius? radius = clipNonuniformBorder ? null : requestedRadius;
@@ -1705,11 +1701,7 @@ class HtmlTreeBuilder {
         decoration: BoxDecoration(gradient: gradient),
         child: content,
       );
-      final radius =
-          style.borderRadiusGeometry ??
-          (style.borderRadius != null
-              ? BorderRadius.circular(style.borderRadius!)
-              : null);
+      final radius = cssBorderRadius(style);
       if (radius != null) {
         result = ClipRRect(borderRadius: radius, child: result);
       }
@@ -1724,11 +1716,7 @@ class HtmlTreeBuilder {
 
     // Clip the background (and its overflow) to the box, rounding the corners
     // when the box has a border-radius — e.g. a hero banner with rounded edges.
-    final radius =
-        style.borderRadiusGeometry ??
-        (style.borderRadius != null && style.borderRadius! > 0
-            ? BorderRadius.circular(style.borderRadius!)
-            : null);
+    final radius = cssBorderRadius(style);
     Widget clip(Widget child) => radius != null
         ? ClipRRect(borderRadius: radius, child: child)
         : ClipRect(child: child);

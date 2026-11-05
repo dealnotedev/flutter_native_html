@@ -5,6 +5,7 @@ import 'package:html/dom.dart' as dom;
 import '../../config/html_image_resolver.dart';
 import '../../css/css_length.dart';
 import '../../css/html_style.dart';
+import '../css_border_radius.dart';
 import '../element_handler.dart';
 import '../html_build_result.dart';
 import '../html_render_context.dart';
@@ -298,15 +299,11 @@ class ImageHandler extends HtmlElementHandler {
     if (corners != null) {
       return ClipRRect(borderRadius: corners, child: child);
     }
-    // A percent radius >= 50% means a full circle/ellipse; smaller percents and
-    // px radii become rounded corners.
+    // A percent radius >= 50% means a full circle/ellipse.
     final percent = style.borderRadiusPercent;
     if (percent != null) {
       if (percent >= 50) return ClipOval(child: child);
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(percent), // best-effort
-        child: child,
-      );
+      return ClipRRect(borderRadius: cssBorderRadius(style)!, child: child);
     }
     final px = style.borderRadius;
     if (px != null && px > 0) {

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Resolve percentage border radii against the rendered box size, including
+  container-clipped avatars, backgrounds and table cells. Preserve rounded
+  overflow clipping when the wrapper has no background or border.
+
 - Add `darkBackgroundColor` to match the email canvas and adapted light neutral
   backgrounds to the host application's dark surface, preserving source alpha
   and author-provided dark themes.
