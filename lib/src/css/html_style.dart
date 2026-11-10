@@ -200,6 +200,9 @@ class HtmlStyle {
     this.listStyleType,
     this.float,
     this.tableLayoutFixed,
+    this.borderSpacingH,
+    this.borderSpacingV,
+    this.borderCollapse,
     this.boxSizing,
   });
 
@@ -281,6 +284,12 @@ class HtmlStyle {
   final String? listStyleType;
   final String? float; // 'left' | 'right' (non-inherited)
   final bool? tableLayoutFixed; // table-layout: fixed
+  // A table's `border-spacing` (or its `cellspacing` hint) in px. Kept
+  // non-inherited: the UA sheet resets both properties on every table, so a
+  // table only ever sees values declared on itself.
+  final double? borderSpacingH;
+  final double? borderSpacingV;
+  final bool? borderCollapse; // border-collapse: collapse
   final CssBoxSizing? boxSizing;
 
   bool get preservesWhitespace =>
@@ -406,6 +415,9 @@ class HtmlStyle {
       listStyleType: other.listStyleType ?? listStyleType,
       float: other.resets.contains('float') ? null : other.float ?? float,
       tableLayoutFixed: other.tableLayoutFixed ?? tableLayoutFixed,
+      borderSpacingH: other.borderSpacingH ?? borderSpacingH,
+      borderSpacingV: other.borderSpacingV ?? borderSpacingV,
+      borderCollapse: other.borderCollapse ?? borderCollapse,
       boxSizing: other.boxSizing ?? boxSizing,
     );
   }

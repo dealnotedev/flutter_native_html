@@ -32,6 +32,55 @@ void main() {
       );
     });
   }
+  // The `font` shorthand always sets line-height: its `/value` or `normal`.
+  // Ignoring it kept an inherited 1.35 inside `font:20px serif` table cells.
+  for (final (style, lineHeight, lineHeightPx) in [
+    ('font:20px serif', null, null),
+    ('font:20px/1.5 serif', 1.5, null),
+    ('font:bold 20px / 30px Arial', null, 30.0),
+    ('line-height:2;font:20px serif', null, null),
+    ('font:20px serif;line-height:2', 2.0, null),
+  ]) {
+    test('"$style" resolves the line-height', () {
+      final element = html_parser
+          .parse('<p style="$style">Text</p>')
+          .querySelector('p')!;
+      final resolver = StyleResolver(
+        stylesheet: CssParser.parseStylesheet(''),
+        rootStyle: const HtmlStyle(),
+      );
+      final resolved = resolver.resolve(
+        element,
+        const HtmlStyle(lineHeight: 1.35),
+      );
+      expect(resolved.lineHeight, lineHeight);
+      expect(resolved.lineHeightPx, lineHeightPx);
+    });
+  }
+
+  // The shorthand resets the omitted weight and style as well, so an
+  // `<h1 style="font:38px Palatino, serif">` loses the UA bold.
+  for (final (tag, style, weight, fontStyle) in [
+    ('h1', 'font:38px Palatino, serif', FontWeight.normal, FontStyle.normal),
+    ('h1', 'font:bold 38px serif', FontWeight.w700, FontStyle.normal),
+    ('em', 'font:16px serif', FontWeight.normal, FontStyle.normal),
+    ('em', 'font:italic 600 16px serif', FontWeight.w600, FontStyle.italic),
+    ('h1', 'font:38px Palatino, serif;font-weight:800', FontWeight.w800, null),
+  ]) {
+    test('"$style" on <$tag> resets weight and style', () {
+      final element = html_parser
+          .parse('<$tag style="$style">Text</$tag>')
+          .querySelector(tag)!;
+      final resolver = StyleResolver(
+        stylesheet: CssParser.parseStylesheet(''),
+        rootStyle: const HtmlStyle(),
+      );
+      final resolved = resolver.resolve(element, const HtmlStyle());
+      expect(resolved.fontWeight, weight);
+      if (fontStyle != null) expect(resolved.fontStyle, fontStyle);
+    });
+  }
+
   test(
     'unvisited link selector styles links without selecting named anchors',
     () {

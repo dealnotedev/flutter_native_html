@@ -197,6 +197,7 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
           buildContext: context,
           rootStyle: rootStyle,
           resolver: resolver,
+          lineHeightQuirk: parsed.lineHeightQuirk,
         );
         _builder = builder;
 

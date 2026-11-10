@@ -1,5 +1,6 @@
 import 'package:flutter_native_html/src/parsing/html_email_parser.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:html/dom.dart' show Node;
 
 void main() {
   final parser = HtmlEmailParser();
@@ -71,14 +72,31 @@ void main() {
     expect(links[2].attributes['href'], '../x');
   });
 
-  test('rejects DOM nested beyond the depth limit', () {
+  test('flattens DOM nested beyond the depth limit like Blink', () {
+    // Blink stops nesting at its depth limit and inserts deeper elements as
+    // siblings; a legacy email with hundreds of unclosed <font> tags still
+    // renders in Chrome, so it must not be rejected here either.
     final deep = HtmlEmailParser(maxDomDepth: 50);
-    final html = '${'<div>' * 200}x${'</div>' * 200}';
-    expect(() => deep.parse(html), throwsA(isA<HtmlContentLimitException>()));
-    // Shallow content of the same size is fine.
+    final html = '${'<div>' * 200}deep text${'</div>' * 200}';
+    final parsed = deep.parse(html);
+    expect(parsed.root.text, contains('deep text'));
+    var maxDepth = 0;
+    final pending = <(Node, int)>[(parsed.root, 0)];
+    while (pending.isNotEmpty) {
+      final (node, depth) = pending.removeLast();
+      if (depth > maxDepth) maxDepth = depth;
+      for (final child in node.nodes) {
+        pending.add((child, depth + 1));
+      }
+    }
+    expect(maxDepth, lessThanOrEqualTo(50));
+    // The node limit still applies to the hoisted nodes.
     expect(
-      () => deep.parse('<div>${'<span></span>' * 200}</div>'),
-      returnsNormally,
+      () => HtmlEmailParser(
+        maxDomDepth: 10,
+        maxDomNodes: 100,
+      ).parse('${'<div>' * 300}x${'</div>' * 300}'),
+      throwsA(isA<HtmlContentLimitException>()),
     );
   });
 }

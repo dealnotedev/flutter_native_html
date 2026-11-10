@@ -55,7 +55,12 @@ app.*.map.json
 /.email_test_store/
 
 # Local automation and agent configuration are not part of the public project.
-/tool/
+# The browser-parity harness is kept; its corpus lives in .email_test_store.
+/tool/*
+!/tool/email_corpus/
+/tool/email_corpus/**/node_modules/
+/tool/email_corpus/**/.venv/
+/tool/email_corpus/_gen/
 /.agents/
 /.codex/
 /AGENTS.md

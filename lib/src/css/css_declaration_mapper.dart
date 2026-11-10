@@ -78,8 +78,42 @@ class CssDeclarationMapper {
     String? listStyleType;
     String? float;
     bool? tableLayoutFixed;
+    double? borderSpacingH;
+    double? borderSpacingV;
+    bool? borderCollapse;
     CssBoxSizing? boxSizing;
     final resets = <String>{};
+
+    // Declarations apply in order; a later value replaces an earlier reset.
+    void setLineHeight(String value) {
+      final lh = value.trim().toLowerCase();
+      lineHeight = null;
+      lineHeightLengthRaw = null;
+      if (lh == 'normal') {
+        resets.add('line-height');
+        return;
+      }
+      resets.remove('line-height');
+      final unitless = double.tryParse(lh);
+      if (unitless != null && unitless.isFinite && unitless >= 0) {
+        lineHeight = unitless; // CSS: multiplier
+      } else if (lh.endsWith('%')) {
+        final p = double.tryParse(lh.replaceAll('%', ''));
+        // A percentage line-height computes to a length on THIS element
+        // (percentage × own font-size) and children inherit that px value —
+        // unlike a unitless number, which inherits as a ratio. Resolve it as
+        // the equivalent em length rather than a multiplier.
+        if (p != null && p.isFinite && p >= 0) {
+          lineHeightLengthRaw = '${p / 100}em';
+        }
+      } else {
+        // A length (px/em/rem): resolve after the loop, against this
+        // element's OWN font-size (an `em` line-height is relative to the
+        // element's font-size, not the parent's — e.g. an `<h1>` with
+        // `font-size:40px;line-height:1.1em` is 44px, not 1.1×parent).
+        lineHeightLengthRaw = lh;
+      }
+    }
 
     final borderParts = <String, Map<String, String>>{};
 
@@ -205,6 +239,17 @@ class CssDeclarationMapper {
           fontWeight = parsed.fontWeight ?? fontWeight;
           fontSize = parsed.fontSize ?? fontSize;
           fontFamilies = parsed.fontFamilies ?? fontFamilies;
+          // The shorthand also sets line-height: `font:20px/1.5 serif` to 1.5,
+          // and a plain `font:20px serif` back to `normal`.
+          if (parsed.fontSize != null) {
+            setLineHeight(parsed.lineHeight ?? 'normal');
+          }
+          // A complete shorthand resets the omitted style and weight too:
+          // `<h1 style="font:38px Palatino, serif">` is not bold.
+          if (parsed.fontSize != null && parsed.fontFamilies != null) {
+            fontStyle = parsed.fontStyle ?? FontStyle.normal;
+            fontWeight = parsed.fontWeight ?? FontWeight.normal;
+          }
           break;
         case 'text-decoration':
         case 'text-decoration-line':
@@ -214,30 +259,7 @@ class CssDeclarationMapper {
           textDecorationColor = CssColor.tryParse(value) ?? textDecorationColor;
           break;
         case 'line-height':
-          final lh = value.trim().toLowerCase();
-          if (lh == 'normal') {
-            resets.add('line-height');
-            break;
-          }
-          final unitless = double.tryParse(lh);
-          if (unitless != null && unitless.isFinite && unitless >= 0) {
-            lineHeight = unitless; // CSS: multiplier
-          } else if (lh.endsWith('%')) {
-            final p = double.tryParse(lh.replaceAll('%', ''));
-            // A percentage line-height computes to a length on THIS element
-            // (percentage × own font-size) and children inherit that px value —
-            // unlike a unitless number, which inherits as a ratio. Resolve it as
-            // the equivalent em length rather than a multiplier.
-            if (p != null && p.isFinite && p >= 0) {
-              lineHeightLengthRaw = '${p / 100}em';
-            }
-          } else {
-            // A length (px/em/rem): resolve after the loop, against this
-            // element's OWN font-size (an `em` line-height is relative to the
-            // element's font-size, not the parent's — e.g. an `<h1>` with
-            // `font-size:40px;line-height:1.1em` is 44px, not 1.1×parent).
-            lineHeightLengthRaw = lh;
-          }
+          setLineHeight(value);
           break;
         case 'letter-spacing':
           // Resolve after the loop against THIS element's own font-size (an `em`
@@ -315,6 +337,26 @@ class CssDeclarationMapper {
             tableLayoutFixed = true;
           } else if (tl == 'auto') {
             tableLayoutFixed = false;
+          }
+          break;
+        case 'border-spacing':
+          // One length (both axes) or two (horizontal, vertical); a negative
+          // or unparsable value drops the whole declaration.
+          final parts = value.trim().split(RegExp(r'\s+'));
+          if (parts.isEmpty || parts.length > 2) break;
+          final h = len(parts[0]);
+          final v = parts.length == 2 ? len(parts[1]) : h;
+          if (h == null || v == null || !h.isFinite || !v.isFinite) break;
+          if (h < 0 || v < 0) break;
+          borderSpacingH = h;
+          borderSpacingV = v;
+          break;
+        case 'border-collapse':
+          final bc = value.trim().toLowerCase();
+          if (bc == 'collapse') {
+            borderCollapse = true;
+          } else if (bc == 'separate') {
+            borderCollapse = false;
           }
           break;
         case 'vertical-align':
@@ -594,6 +636,9 @@ class CssDeclarationMapper {
       listStyleType: listStyleType,
       float: float,
       tableLayoutFixed: tableLayoutFixed,
+      borderSpacingH: borderSpacingH,
+      borderSpacingV: borderSpacingV,
+      borderCollapse: borderCollapse,
       boxSizing: boxSizing,
     );
   }
@@ -1047,7 +1092,12 @@ class CssDeclarationMapper {
     FontStyle? style;
     FontWeight? weight;
     double? size;
-    final tokens = value.trim().split(RegExp(r'\s+'));
+    String? lineHeight;
+    // `14px/20px` and `14px / 20px` both carry the line-height.
+    final tokens = value
+        .trim()
+        .replaceAll(RegExp(r'\s*/\s*'), '/')
+        .split(RegExp(r'\s+'));
     final remainder = <String>[];
     for (final t in tokens) {
       final s = _fontStyle(t);
@@ -1060,9 +1110,11 @@ class CssDeclarationMapper {
         weight = w;
         continue;
       }
-      final fs = _fontSize(t.split('/').first, parent, root);
+      final parts = t.split('/');
+      final fs = _fontSize(parts.first, parent, root);
       if (fs != null && size == null) {
         size = fs;
+        if (parts.length > 1 && parts[1].isNotEmpty) lineHeight = parts[1];
         continue;
       }
       remainder.add(t);
@@ -1071,7 +1123,7 @@ class CssDeclarationMapper {
         ? null
         : _fontFamilies(remainder.join(' '));
     final safeSize = size != null && size.isFinite && size >= 0 ? size : null;
-    return _FontShorthand(style, weight, safeSize, families);
+    return _FontShorthand(style, weight, safeSize, families, lineHeight);
   }
 }
 
@@ -1081,9 +1133,13 @@ class _FontShorthand {
     this.fontWeight,
     this.fontSize,
     this.fontFamilies,
+    this.lineHeight,
   );
   final FontStyle? fontStyle;
   final FontWeight? fontWeight;
   final double? fontSize;
   final List<String>? fontFamilies;
+
+  /// The raw `/line-height` part, if any.
+  final String? lineHeight;
 }

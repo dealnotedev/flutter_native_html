@@ -582,7 +582,21 @@ class StyleResolver {
       }
     }
 
+    // `cellspacing` is a presentational hint for border-spacing, so any author
+    // `border-spacing` (a stylesheet `table{border-spacing:0}` included)
+    // overrides it. Negative hints clamp to 0 (Flutter insets assert on them).
+    double? spacing;
+    if (tag == 'table') {
+      final raw = RegExp(
+        r'^\s*(-?\d+(?:\.\d+)?)',
+      ).firstMatch(attrs['cellspacing'] ?? '');
+      final value = raw == null ? null : double.tryParse(raw.group(1)!);
+      if (value != null && value.isFinite) spacing = value < 0 ? 0 : value;
+    }
+
     return HtmlStyle(
+      borderSpacingH: spacing,
+      borderSpacingV: spacing,
       backgroundColor: backgroundColor,
       backgroundImage: backgroundImage,
       color: color,

@@ -16,6 +16,7 @@ import 'element_registry.dart';
 import 'html_build_result.dart';
 import 'html_render_context.dart';
 import 'layout/equal_height_row.dart';
+import 'layout/float_flow.dart';
 import 'layout/negative_margin.dart';
 import 'layout/percent_boxes.dart';
 
@@ -36,10 +37,14 @@ class HtmlTreeBuilder {
     required this.buildContext,
     required HtmlStyle rootStyle,
     required StyleResolver resolver,
+    this.lineHeightQuirk = false,
   }) : _rootStyle = rootStyle, // ignore: prefer_initializing_formals
        _resolver = resolver; // ignore: prefer_initializing_formals
 
   final HtmlRenderConfig config;
+
+  /// See [ParsedEmail.lineHeightQuirk].
+  final bool lineHeightQuirk;
   final BuildContext buildContext;
   final HtmlStyle _rootStyle;
   final StyleResolver _resolver;
@@ -140,6 +145,7 @@ class HtmlTreeBuilder {
             (_registry.handlerFor(node.localName ?? '') == null ||
                 node.localName == 'ul' ||
                 node.localName == 'ol');
+        if (normalBlock) style = _collapseChildMargins(node, style);
         double edge(CssLength? value) =>
             (value?.resolve(
                       fontSize: style.resolvedFontSize,
@@ -147,25 +153,23 @@ class HtmlTreeBuilder {
                     ) ??
                     0)
                 .clamp(0, double.infinity);
-        final emptyBlock =
-            normalBlock &&
-            !style.preservesWhitespace &&
-            !style.preservesNewlines &&
-            style.overflowHidden != true &&
-            node.nodes.every(
-              (child) =>
-                  child is dom.Comment ||
-                  child is dom.Text &&
-                      child.text.replaceAll(_collapsibleWhitespace, '').isEmpty,
-            ) &&
-            (style.height?.value ?? 0) == 0 &&
-            (style.minHeight?.value ?? 0) == 0 &&
-            (style.padding?.top?.value ?? 0) == 0 &&
-            (style.padding?.bottom?.value ?? 0) == 0 &&
-            _borderExtent(style.borders, false) == 0;
+        final nested = <dom.Element>[];
+        final innerMargin = normalBlock
+            ? _collapseThroughMargin(node, style, nested)
+            : null;
+        final emptyBlock = innerMargin != null;
+        if (emptyBlock) {
+          // The whole empty subtree is one collapsed margin, carried by
+          // [node]; the nested blocks lay out with none of their own.
+          _collapsedTopMargins.addAll(nested);
+          _collapsedBottomMargins.addAll(nested);
+        }
         var top = edge(style.margin?.top);
         final bottom = edge(style.margin?.bottom);
-        final emptyMargin = top > bottom ? top : bottom;
+        var emptyMargin = top > bottom ? top : bottom;
+        if (innerMargin != null && innerMargin > emptyMargin) {
+          emptyMargin = innerMargin;
+        }
         if (emptyBlock) {
           top = emptyMargin;
           style = style.merge(
@@ -635,28 +639,62 @@ class HtmlTreeBuilder {
         final content = shrinkBlockChildren
             ? IntrinsicWidth(child: flow(results, ctx.style))
             : flow(results, ctx.style);
-        final box = decorate(content, ctx.style, inline: true);
         // A percent-width inline-block is a column (MJML `mj-column-per-N`): the
         // flow step rows a run of them side by side, or stacks them when they
         // don't fit (each 100% on a narrow layout). The effective column width
         // is min(width, max-width) — MJML sets width:100% but caps it with
         // max-width:50% to get a half-width column.
         double? pct;
-        if (w != null && !w.isAuto && w.unit == CssLengthUnit.percent) {
-          pct = w.value;
-        }
+        final percentWidth =
+            w != null && !w.isAuto && w.unit == CssLengthUnit.percent;
+        if (percentWidth) pct = w.value;
         if (mw != null && mw.unit == CssLengthUnit.percent) {
           pct = pct == null ? mw.value : (mw.value < pct ? mw.value : pct);
         }
         if (pct != null) {
-          return [ColumnResult(box, pct)];
+          // The column row already allots the percentage. Resolving the
+          // box's own percentage again inside that share made a desktop MJML
+          // `width:33%` column a third of a third.
+          final columnStyle = percentWidth
+              ? ctx.style.merge(
+                  const HtmlStyle(width: CssLength(100, CssLengthUnit.percent)),
+                )
+              : ctx.style;
+          return [
+            ColumnResult(decorate(content, columnStyle, inline: true), pct),
+          ];
         }
+        final box = decorate(content, ctx.style, inline: true);
         return [
           InlineResult(
             WidgetSpan(alignment: PlaceholderAlignment.middle, child: box),
           ),
         ];
       case CssDisplay.block:
+        final results = buildChildNodes(element, ctx.childInherited);
+        // A bare wrapper around one narrow floated table (Constant Contact's
+        // `<div><table align="left">image</table></div>` before the text
+        // block) passes the float on, so the next block wraps beside it.
+        final clear = _resolver
+            .computedDeclarationsFor(element)['clear']
+            ?.trim()
+            .toLowerCase();
+        final clears = clear == 'both' || clear == 'left' || clear == 'right';
+        final content = results
+            .where((r) => r is! InlineResult || !r.isWhitespaceOnly)
+            .toList();
+        // A clearing wrapper must stay a block: it starts below the floats
+        // before it, so its own float cannot join their row.
+        if (!clears &&
+            content.length == 1 &&
+            content.single is ColumnResult &&
+            _isNarrowFloat(content.single as ColumnResult) &&
+            _isBareBox(ctx.style)) {
+          return content;
+        }
+        return [
+          BlockResult(_blockFromResults(element, ctx, results), clears: clears),
+        ];
       case CssDisplay.listItem:
       case CssDisplay.tableRowGroup:
       case CssDisplay.tableRow:
@@ -714,6 +752,29 @@ class HtmlTreeBuilder {
     Iterable<dom.Element>? cellElements,
     bool decorateTable = true,
   }) {
+    if (cellElements == null) {
+      final childDisplays = [
+        for (final child in element.children)
+          contextFor(child, ctx.childInherited).style.display,
+      ].where((display) => display != CssDisplay.none).toList();
+      if (!childDisplays.contains(CssDisplay.tableCell)) {
+        // CSS wraps the non-cell children of a table box in one anonymous row
+        // and cell, so they stack in normal flow — e.g. Campaign Monitor's
+        // `<center class="wrapper" style="display:table;width:100%">` around
+        // block tables. Only an auto-width table of inline content keeps the
+        // shrink-to-fit row below (a centred `display:table` button).
+        final width = ctx.style.width;
+        final explicitWidth = width != null && !width.isAuto;
+        final blockChildren =
+            childDisplays.isNotEmpty &&
+            childDisplays.every(
+              (display) =>
+                  display != CssDisplay.inline &&
+                  display != CssDisplay.inlineBlock,
+            );
+        if (explicitWidth || blockChildren) return buildBlock(element, ctx);
+      }
+    }
     final rootFontSize = _rootStyle.resolvedFontSize;
     final cells = <({Widget child, double? percent, double? fixedPx})>[];
     var anyFlex = false;
@@ -786,6 +847,7 @@ class HtmlTreeBuilder {
         children: [for (final cell in cells) cell.child],
       );
     } else {
+      final allFixed = cells.every((cell) => cell.fixedPx != null);
       row = Row(
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: mainAxisAlignment,
@@ -793,9 +855,21 @@ class HtmlTreeBuilder {
             ? CrossAxisAlignment.center
             : CrossAxisAlignment.start,
         textDirection: ctx.style.textDirection,
-        children: [for (final cell in cells) cell.child],
+        children: [
+          for (final cell in cells)
+            // An auto-width cell is shrink-to-fit: its max-content width,
+            // capped by the line. A bare Row child would get an unbounded
+            // width, which a stretched block column inside cannot take.
+            if (allFixed || cell.fixedPx != null)
+              cell.child
+            else
+              Flexible(
+                fit: FlexFit.loose,
+                child: IntrinsicWidth(child: cell.child),
+              ),
+        ],
       );
-      if (cells.every((cell) => cell.fixedPx != null)) {
+      if (allFixed) {
         // Desktop email columns can add up to the container's border-box
         // width, leaving a slightly smaller content box. Match fixed HTML
         // table rows: fit the columns without overflowing the border.
@@ -905,6 +979,116 @@ class HtmlTreeBuilder {
 
   /// Flows an element's children into a block widget and applies its box
   /// decoration.
+  /// For a normal-flow block with no line boxes and nothing separating its
+  /// top margin from its bottom one, every margin inside collapses through
+  /// it into one (CSS 2.1 §8.3.1): `<div><div style="margin:20px 0 30px">
+  /// </div><div style="margin:40px 0 50px"></div></div>` is one 50px margin.
+  /// Returns the largest margin of its descendants (0 if none) and adds them
+  /// to [nested]; null when [node] has content or a separating box.
+  double? _collapseThroughMargin(
+    dom.Element node,
+    HtmlStyle style,
+    List<dom.Element> nested,
+  ) {
+    if (style.preservesWhitespace ||
+        style.preservesNewlines ||
+        style.overflowHidden == true ||
+        (style.height?.value ?? 0) != 0 ||
+        (style.minHeight?.value ?? 0) != 0 ||
+        (style.padding?.top?.value ?? 0) != 0 ||
+        (style.padding?.bottom?.value ?? 0) != 0 ||
+        _borderExtent(style.borders, false) != 0) {
+      return null;
+    }
+    var largest = 0.0;
+    for (final child in node.nodes) {
+      if (child is dom.Comment) continue;
+      if (child is dom.Text) {
+        if (child.text.replaceAll(_collapsibleWhitespace, '').isEmpty) {
+          continue;
+        }
+        return null;
+      }
+      if (child is! dom.Element) return null;
+      final childStyle = _resolver.resolve(child, style.inheritedOnly());
+      if (childStyle.display == CssDisplay.none) continue;
+      final childBlock =
+          childStyle.display == CssDisplay.block &&
+          childStyle.float == null &&
+          (_registry.handlerFor(child.localName ?? '') == null ||
+              child.localName == 'ul' ||
+              child.localName == 'ol');
+      if (!childBlock) return null;
+      final inner = _collapseThroughMargin(child, childStyle, nested);
+      if (inner == null) return null;
+      // A margin an ancestor already carries (hoisted, or a whole collapsed
+      // subtree) counts as zero here, as in _collapseChildMargins.
+      double margin(CssLength? length, Set<dom.Element> taken) =>
+          taken.contains(child)
+          ? 0
+          : (length?.resolve(
+                      fontSize: childStyle.resolvedFontSize,
+                      rootFontSize: config.baseFontSize,
+                    ) ??
+                    0)
+                .clamp(0.0, double.infinity);
+      for (final m in [
+        inner,
+        margin(childStyle.margin?.top, _collapsedTopMargins),
+        margin(childStyle.margin?.bottom, _collapsedBottomMargins),
+      ]) {
+        if (m > largest) largest = m;
+      }
+      nested.add(child);
+    }
+    return largest;
+  }
+
+  /// A lone legacy float column (`<table align="left">` around an image) of
+  /// known width that leaves most of the line to the content after it.
+  bool _isNarrowFloat(ColumnResult column) {
+    final width = column.floatWidth;
+    return column.float != null &&
+        width != null &&
+        width > 0 &&
+        (!availableWidth.isFinite || width <= availableWidth / 2);
+  }
+
+  /// A box that only groups its children: nothing of its own to draw or size.
+  static bool _isBareBox(HtmlStyle style) {
+    bool zero(CssLength? length) => length == null || length.value == 0;
+    final padding = style.padding;
+    final borders = style.borders;
+    bool noBorder(CssBorderSide? side) =>
+        side == null || side.width <= 0 || side.style == CssBorderStyle.none;
+    return (padding == null ||
+            zero(padding.top) &&
+                zero(padding.right) &&
+                zero(padding.bottom) &&
+                zero(padding.left)) &&
+        (borders == null ||
+            noBorder(borders.top) &&
+                noBorder(borders.right) &&
+                noBorder(borders.bottom) &&
+                noBorder(borders.left)) &&
+        style.backgroundColor == null &&
+        style.backgroundImage == null &&
+        (style.width == null || style.width!.isAuto) &&
+        style.minWidth == null &&
+        style.maxWidth == null &&
+        (style.margin == null ||
+            zero(style.margin!.top) &&
+                zero(style.margin!.right) &&
+                zero(style.margin!.bottom) &&
+                zero(style.margin!.left)) &&
+        style.height == null &&
+        style.minHeight == null &&
+        style.overflowHidden != true &&
+        // `opacity` is not inherited: dropping the wrapper would show what
+        // it hides (`<div style="opacity:0">` around a float).
+        (style.opacity == null || style.opacity! >= 1);
+  }
+
   Widget buildBlock(dom.Element element, HtmlRenderContext ctx) {
     final results = buildChildNodes(element, ctx.childInherited);
     return _blockFromResults(element, ctx, results);
@@ -934,6 +1118,11 @@ class HtmlTreeBuilder {
     TextWidthBasis textWidthBasis = TextWidthBasis.parent,
   }) {
     final children = <Widget>[];
+    // While a legacy float is open, the content after it collects here and
+    // becomes a FloatFlow beside/below it.
+    final floatChildren = <Widget>[];
+    var target = children;
+    ColumnResult? activeFloat;
     final buffer = <InlineResult>[];
     final floats = <FloatResult>[];
     Widget withFloats(Widget paragraph) {
@@ -1003,7 +1192,7 @@ class HtmlTreeBuilder {
             leadingDistribution: TextLeadingDistribution.even,
           ),
         )..layout();
-        children.add(
+        target.add(
           withFloats(
             SizedBox(height: probe.height * '\n'.allMatches(plain).length),
           ),
@@ -1060,7 +1249,10 @@ class HtmlTreeBuilder {
           // Uniform text already carries this line-height. A duplicate strut
           // can add a rounded pixel when a fallback emoji supplies metrics.
           // Keep the CSS floor for smaller/different inline runs and widgets.
-          strutStyle: uniformText
+          // In (limited-)quirks mode the block's strut only counts on lines
+          // with the block's direct text, and such text already carries the
+          // same metrics; lines of spans or images take their own height.
+          strutStyle: uniformText || lineHeightQuirk
               ? null
               : _strutFor(containerStyle, distribution),
           textHeightBehavior: TextHeightBehavior(
@@ -1074,7 +1266,7 @@ class HtmlTreeBuilder {
                 containerStyle.lineHeight == 0);
         // Preserve the intrinsic width of a nonbreaking-space sizing hack,
         // while respecting its zero CSS line box. No visible glyph is clipped.
-        children.add(
+        target.add(
           withFloats(
             zeroWhitespaceLine
                 ? SizedBox(height: 0, child: paragraph)
@@ -1082,7 +1274,7 @@ class HtmlTreeBuilder {
           ),
         );
       } else if (floats.isNotEmpty) {
-        children.add(withFloats(const SizedBox.shrink()));
+        target.add(withFloats(const SizedBox.shrink()));
       }
       buffer.clear();
     }
@@ -1091,54 +1283,143 @@ class HtmlTreeBuilder {
     // them out side by side in a Row when their widths fit (sum <= ~100%), or
     // stack them when they don't (each is 100% on a narrow layout).
     final columns = <ColumnResult>[];
+    // Share of a short column run's free space placed before it.
+    double leadingSpace(HtmlStyle style) {
+      final rtl = style.textDirection == TextDirection.rtl;
+      return switch (style.effectiveTextAlign) {
+        TextAlign.center => 0.5,
+        TextAlign.right => 1,
+        TextAlign.left => 0,
+        TextAlign.end => rtl ? 0 : 1,
+        _ => rtl ? 1 : 0,
+      };
+    }
+
+    // One line of columns side by side; each takes its percentage as flex.
+    Widget columnRow(List<ColumnResult> line, double total) {
+      final hasRightFloat = line.any((c) => c.float == 'right');
+      final allFloated = line.every((c) => c.float != null);
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        // `direction:rtl` on the container reverses the columns (the email
+        // trick for "image on the right" with image-first source order).
+        textDirection: containerStyle.textDirection,
+        children: hasRightFloat && allFloated
+            ? [
+                // CSS floats consume their intrinsic widths from opposite
+                // sides. The flexible remainder belongs between the left
+                // and right groups (e.g. three app badges floated left and
+                // the final badge floated right).
+                for (final c in line.where((c) => c.float != 'right'))
+                  Flexible(
+                    flex: (c.percent * 100).round().clamp(1, 100000),
+                    child: c.widget,
+                  ),
+                if (total < 100)
+                  Spacer(flex: ((100 - total) * 100).round().clamp(1, 100000)),
+                for (final c in line.where((c) => c.float == 'right'))
+                  Flexible(
+                    flex: (c.percent * 100).round().clamp(1, 100000),
+                    child: c.widget,
+                  ),
+              ]
+            : [
+                // Columns narrower than the line in total keep their
+                // percentages; the line's text-align places the rest.
+                if (total < 99.5 && leadingSpace(containerStyle) > 0)
+                  Spacer(
+                    flex: ((100 - total) * 100 * leadingSpace(containerStyle))
+                        .round()
+                        .clamp(1, 100000),
+                  ),
+                for (final c in line)
+                  Flexible(
+                    flex: (c.percent * 100).round().clamp(1, 100000),
+                    child: c.widget,
+                  ),
+                if (total < 99.5 && leadingSpace(containerStyle) < 1)
+                  Spacer(
+                    flex:
+                        ((100 - total) *
+                                100 *
+                                (1 - leadingSpace(containerStyle)))
+                            .round()
+                            .clamp(1, 100000),
+                  ),
+              ],
+      );
+    }
+
     void flushColumns() {
       if (columns.isEmpty) return;
-      final total = columns.fold<double>(0, (s, c) => s + c.percent);
-      if (columns.length > 1 && total <= 105) {
-        final hasRightFloat = columns.any((c) => c.float == 'right');
-        final allFloated = columns.every((c) => c.float != null);
-        children.add(
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            // `direction:rtl` on the container reverses the columns (the email
-            // trick for "image on the right" with image-first source order).
-            textDirection: containerStyle.textDirection,
-            children: hasRightFloat && allFloated
-                ? [
-                    // CSS floats consume their intrinsic widths from opposite
-                    // sides. The flexible remainder belongs between the left
-                    // and right groups (e.g. three app badges floated left and
-                    // the final badge floated right).
-                    for (final c in columns.where((c) => c.float != 'right'))
-                      Flexible(
-                        flex: (c.percent * 100).round().clamp(1, 100000),
-                        child: c.widget,
-                      ),
-                    if (total < 100)
-                      Spacer(
-                        flex: ((100 - total) * 100).round().clamp(1, 100000),
-                      ),
-                    for (final c in columns.where((c) => c.float == 'right'))
-                      Flexible(
-                        flex: (c.percent * 100).round().clamp(1, 100000),
-                        child: c.widget,
-                      ),
-                  ]
-                : [
-                    for (final c in columns)
-                      Flexible(
-                        flex: c.percent.round().clamp(1, 1000),
-                        child: c.widget,
-                      ),
-                  ],
-          ),
-        );
-      } else {
+      if (columns.every((c) => c.float == null)) {
+        // Inline-block columns wrap like the inline boxes they are: a line
+        // takes columns until the next would overflow it (105% tolerates
+        // rounded `33.34%` triples), and each keeps its own share. Their
+        // boxes fill the slot their line allots, so a lone or wrapped
+        // `width:60%` column must still get a row of its own.
+        var line = <ColumnResult>[];
+        var sum = 0.0;
+        void emitLine() {
+          if (line.isEmpty) return;
+          target.add(
+            line.length == 1 && sum >= 99.5
+                ? line.single.widget
+                : columnRow(line, sum),
+          );
+          line = [];
+          sum = 0;
+        }
+
         for (final c in columns) {
-          children.add(c.widget);
+          if (line.isNotEmpty && sum + c.percent > 105) emitLine();
+          line.add(c);
+          sum += c.percent;
+        }
+        emitLine();
+      } else {
+        // Legacy float tables (`align=left/right`): their percentages are
+        // estimates, so only a run that fits shares a row.
+        final total = columns.fold<double>(0, (s, c) => s + c.percent);
+        if (columns.length > 1 && total <= 105) {
+          target.add(columnRow(columns, total));
+        } else {
+          for (final c in columns) {
+            target.add(c.widget);
+          }
         }
       }
       columns.clear();
+    }
+
+    // A lone narrow float column followed by content floats beside it, the
+    // way an `align="left"` image table lets the next text wrap around it.
+    ColumnResult? loneFloat() =>
+        activeFloat == null &&
+            columns.length == 1 &&
+            _isNarrowFloat(columns.single)
+        ? columns.single
+        : null;
+    void startFloat(ColumnResult float) {
+      columns.clear();
+      activeFloat = float;
+      target = floatChildren;
+    }
+
+    void endFloat() {
+      final float = activeFloat;
+      if (float == null) return;
+      final content = [...floatChildren];
+      floatChildren.clear();
+      activeFloat = null;
+      target = children;
+      children.add(
+        FloatFlow(
+          floatWidth: float.floatWidth!,
+          right: float.float == 'right',
+          children: [float.widget, ...content],
+        ),
+      );
     }
 
     for (final result in results) {
@@ -1148,22 +1429,42 @@ class HtmlTreeBuilder {
           if (result.isWhitespaceOnly && columns.isNotEmpty && buffer.isEmpty) {
             break;
           }
+          final float = loneFloat();
+          if (float != null && !result.isWhitespaceOnly) startFloat(float);
           flushColumns();
           buffer.add(result);
         case ColumnResult():
           flushInline();
+          endFloat();
           columns.add(result);
         case FloatResult():
           flushColumns();
           floats.add(result);
-        case BlockResult(:final widget):
+        case BlockResult(:final widget, :final clears):
+          if (clears) {
+            flushInline();
+            flushColumns();
+            endFloat();
+            children.add(widget);
+            break;
+          }
+          final float = loneFloat();
+          if (float != null &&
+              floats.isEmpty &&
+              buffer.every((r) => r.isWhitespaceOnly)) {
+            buffer.clear();
+            startFloat(float);
+            target.add(widget);
+            break;
+          }
           flushInline();
           flushColumns();
-          children.add(widget);
+          target.add(widget);
       }
     }
     flushInline();
     flushColumns();
+    endFloat();
 
     if (children.isEmpty) return const SizedBox.shrink();
     if (children.length == 1) return children.first;
@@ -1454,6 +1755,28 @@ class HtmlTreeBuilder {
           );
     final hasPatternedBorder =
         patternedBorder?.hasVisiblePatternedSide ?? false;
+    // Dashed/dotted/double sides are painted in the foreground, outside
+    // BoxDecoration, so reserve their width like a solid border's.
+    double patternedWidth(CssBorderSide? side) =>
+        side == null ||
+            side.width <= 0 ||
+            !side.width.isFinite ||
+            side.style == CssBorderStyle.none ||
+            side.style == CssBorderStyle.solid
+        ? 0
+        : side.width;
+    final patternedInsets = style.borders == null
+        ? EdgeInsets.zero
+        : EdgeInsets.only(
+            top: patternedWidth(style.borders!.top),
+            right: patternedWidth(style.borders!.right),
+            bottom: patternedWidth(style.borders!.bottom),
+            left: patternedWidth(style.borders!.left),
+          );
+    if (patternedInsets != EdgeInsets.zero) {
+      containerPadding =
+          (containerPadding ?? EdgeInsets.zero) + patternedInsets;
+    }
     final hasDecoration =
         background != null ||
         border != null ||
@@ -1844,6 +2167,124 @@ class HtmlTreeBuilder {
       top: insets.top < 0 ? 0 : insets.top,
       right: insets.right < 0 ? 0 : insets.right,
       bottom: insets.bottom < 0 ? 0 : insets.bottom,
+    );
+  }
+
+  /// Blocks whose top/bottom margin moved to an ancestor by parent-child
+  /// margin collapsing; they lay out with a zero margin on that side.
+  final _collapsedTopMargins = <dom.Element>{};
+  final _collapsedBottomMargins = <dom.Element>{};
+
+  bool _isNormalFlowBlock(dom.Element element, HtmlStyle style) =>
+      style.display == CssDisplay.block &&
+      style.float == null &&
+      (_registry.handlerFor(element.localName ?? '') == null ||
+          element.localName == 'ul' ||
+          element.localName == 'ol');
+
+  /// The first (or last) child box of [parent] in normal flow, if it is a
+  /// block whose margin may collapse with the parent's. Inline content, a
+  /// table or any other box in that position stops the collapse.
+  ({dom.Element element, HtmlStyle style})? _edgeFlowBlock(
+    dom.Element parent,
+    HtmlStyle parentStyle, {
+    required bool first,
+  }) {
+    final nodes = first ? parent.nodes : parent.nodes.reversed;
+    final inherited = parentStyle.inheritedOnly();
+    for (final node in nodes) {
+      if (node is dom.Comment) continue;
+      if (node is dom.Text) {
+        if (parentStyle.preservesWhitespace ||
+            node.text.replaceAll(_collapsibleWhitespace, '').isNotEmpty) {
+          return null;
+        }
+        continue;
+      }
+      if (node is! dom.Element) return null;
+      final style = _resolver.resolve(node, inherited);
+      if (style.display == CssDisplay.none) continue;
+      return _isNormalFlowBlock(node, style)
+          ? (element: node, style: style)
+          : null;
+    }
+    return null;
+  }
+
+  /// CSS 2.1 §8.3.1: a block's top margin collapses with its first in-flow
+  /// child's when no border or padding separates them (likewise the bottom
+  /// margin with the last child for an auto-height block). Email markup nests
+  /// paragraphs in divs and cells everywhere; adding the child margins inside
+  /// the parent doubled such gaps. The collapsed (largest) margin moves to
+  /// [element]; the descendants lay out with zero on that side.
+  HtmlStyle _collapseChildMargins(dom.Element element, HtmlStyle style) {
+    final zeroTop = _collapsedTopMargins.contains(element);
+    final zeroBottom = _collapsedBottomMargins.contains(element);
+    double px(CssLength? length, HtmlStyle s) =>
+        length?.resolve(
+          fontSize: s.resolvedFontSize,
+          rootFontSize: config.baseFontSize,
+          fallback: 0,
+        ) ??
+        0;
+    double sidePadding(HtmlStyle s, bool top) =>
+        px(top ? s.padding?.top : s.padding?.bottom, s);
+    double sideBorder(HtmlStyle s, bool top) {
+      final side = top ? s.borders?.top : s.borders?.bottom;
+      return side == null || !side.width.isFinite || side.width <= 0
+          ? 0
+          : side.width;
+    }
+
+    bool separates(HtmlStyle s, {required bool top}) =>
+        s.overflowHidden == true ||
+        sidePadding(s, top) != 0 ||
+        sideBorder(s, top) != 0 ||
+        (!top &&
+            ((s.height != null && !s.height!.isAuto) ||
+                (s.minHeight?.value ?? 0) > 0));
+
+    double collapse({required bool top}) {
+      var margin = (top ? zeroTop : zeroBottom)
+          ? 0.0
+          : px(top ? style.margin?.top : style.margin?.bottom, style);
+      if (margin < 0) return margin;
+      var parent = element;
+      var parentStyle = style;
+      final collapsed = top ? _collapsedTopMargins : _collapsedBottomMargins;
+      while (!separates(parentStyle, top: top)) {
+        final child = _edgeFlowBlock(parent, parentStyle, first: top);
+        if (child == null) break;
+        // A margin an outer ancestor already took is zero here; counting it
+        // again at every level of a deep div nest stacked it 25 times.
+        final childMargin = collapsed.contains(child.element)
+            ? 0.0
+            : px(
+                top ? child.style.margin?.top : child.style.margin?.bottom,
+                child.style,
+              );
+        // Negative margins combine differently; leave them in place.
+        if (childMargin < 0) break;
+        if (childMargin > margin) margin = childMargin;
+        collapsed.add(child.element);
+        parent = child.element;
+        parentStyle = child.style;
+      }
+      return margin;
+    }
+
+    final top = collapse(top: true);
+    final bottom = collapse(top: false);
+    final ownTop = px(style.margin?.top, style);
+    final ownBottom = px(style.margin?.bottom, style);
+    if (top == ownTop && bottom == ownBottom) return style;
+    return style.merge(
+      HtmlStyle(
+        margin: CssEdges(
+          top: CssLength(top, CssLengthUnit.px),
+          bottom: CssLength(bottom, CssLengthUnit.px),
+        ),
+      ),
     );
   }
 

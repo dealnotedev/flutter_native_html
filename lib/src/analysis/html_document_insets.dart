@@ -393,22 +393,18 @@ class _Estimator {
   _Content table(dom.Element node, HtmlStyle style, double? width) {
     final rows = <_Content>[];
     final rawPadding = double.tryParse(node.attributes['cellpadding'] ?? '');
+    // Browsers default `td, th { padding: 1px }` (as TableHandler does).
     final padding = rawPadding == null || !rawPadding.isFinite
-        ? 2.0
+        ? 1.0
         : _positive(rawPadding);
-    final rawSpacing = double.tryParse(node.attributes['cellspacing'] ?? '');
-    final spacing = rawSpacing == null || !rawSpacing.isFinite
-        ? config.defaultTableCellSpacing
-        : _positive(rawSpacing);
-    // Inline border-spacing has its own parsing path in TableHandler. Do not
-    // silently substitute the default for a value this estimator does not model.
-    if (rawSpacing == null &&
-        RegExp(
-          r'border-spacing\s*:',
-          caseSensitive: false,
-        ).hasMatch(node.attributes['style'] ?? '')) {
+    // The resolved table style carries `cellspacing` / `border-spacing` /
+    // `border-collapse` with their cascade order already applied.
+    if (style.borderSpacingH != style.borderSpacingV) {
       return const _Content.unknown();
     }
+    final spacing = style.borderCollapse == true
+        ? 0.0
+        : style.borderSpacingH ?? config.defaultTableCellSpacing;
     final cellWidth = width == null ? null : _positive(width - 2 * spacing);
     void collect(dom.Element parent, HtmlStyle inherited) {
       for (final child in parent.children) {

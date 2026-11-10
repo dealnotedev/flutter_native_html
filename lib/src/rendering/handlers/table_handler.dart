@@ -97,6 +97,9 @@ class TableHandler extends HtmlElementHandler {
                   ? w.value
                   : _floatColumnPercent(element, context),
               float: floatSide,
+              floatWidth: legacyPercentColumn
+                  ? null
+                  : _floatPreferredWidth(element, context),
             ),
           ];
         }
@@ -256,14 +259,32 @@ class TableHandler extends HtmlElementHandler {
     // Flat auto-width rows (for example an icon followed by a label) keep
     // their natural column widths. Structural wrappers with nested tables
     // still need the containing width to resolve responsive descendants.
-    final naturalAutoWidth =
-        native &&
+    final flatAutoRows =
         noWidth &&
         noMaxWidth &&
         columns > 1 &&
         rowData.every(
           (row) => row.cells.every(
             (cell) => cell.element.querySelector('table') == null,
+          ),
+        );
+    final naturalAutoWidth = native && flatAutoRows;
+    // The spaced/ragged fallback lays rows out with flexible cells. A widthless
+    // table is still shrink-to-fit in CSS (a `border="1" cellspacing="2"`
+    // data table must not stretch across the email), so size it to content
+    // when no cell asks for a percentage of the table.
+    final naturalFallbackWidth =
+        !native &&
+        !shrink &&
+        !hasStack &&
+        !wrapsInlineCells &&
+        flatAutoRows &&
+        rowData.every(
+          (row) => row.cells.every(
+            (cell) =>
+                cell.ctx.style.width?.unit != CssLengthUnit.percent &&
+                (cell.element.attributes['width'] ?? '').trim().endsWith('%') ==
+                    false,
           ),
         );
     // For the native path, compute the column layout up front so we know whether
@@ -347,6 +368,10 @@ class TableHandler extends HtmlElementHandler {
             layout!.widths,
             resolvedPercentHeight,
           )
+        : naturalFallbackWidth
+        ? IntrinsicWidth(
+            child: _buildFallback(table, context, rows, rtl, cellSpacing),
+          )
         : _buildFallback(table, context, rows, rtl, cellSpacing);
 
     // A percentage-width table sizes its actual grid to the containing block,
@@ -363,9 +388,11 @@ class TableHandler extends HtmlElementHandler {
     // on Flutter's Table widget.
     final legacyGrid =
         (double.tryParse(table.attributes['border'] ?? '') ?? 0) > 0;
+    // The Row-based fallback has no Flutter Table to draw that grid, so its
+    // outer box keeps the legacy border and each cell outlines itself.
     var decorated = context.builder.decorate(
       content,
-      _boxOnly(context.style, includeBorders: !legacyGrid),
+      _boxOnly(context.style, includeBorders: !legacyGrid || !native),
     );
 
     // Apply the table's own CSS `width`. A table with a flex column must be
@@ -445,7 +472,11 @@ class TableHandler extends HtmlElementHandler {
     }
 
     final needsAlign =
-        !inline && (shrink || fixedWidth != null || naturalAutoWidth);
+        !inline &&
+        (shrink ||
+            fixedWidth != null ||
+            naturalAutoWidth ||
+            naturalFallbackWidth);
     if (needsAlign) {
       final alignment =
           tableAlign == 'right' ||
@@ -633,6 +664,53 @@ class TableHandler extends HtmlElementHandler {
   /// first cell's width when the table is widthless, against the nearest
   /// definite ancestor width. Consecutive ColumnResults use these values as
   /// flex weights, preserving the authored ratio.
+  /// The px width a floated table asks for: its own width, else its first
+  /// row's cells (a fixed width, or the sized images of an image-only cell).
+  /// Null when a cell's width depends on text. Intrinsic measurement cannot
+  /// stand in for this: an image cell is a flex column, which measures 0.
+  double? _floatPreferredWidth(dom.Element table, HtmlRenderContext context) {
+    double? absolute(CssLength? length, HtmlStyle style) {
+      if (length == null ||
+          length.isAuto ||
+          length.unit == CssLengthUnit.percent) {
+        return null;
+      }
+      return length.resolve(
+        fontSize: style.resolvedFontSize,
+        rootFontSize: context.config.baseFontSize,
+      );
+    }
+
+    final own = absolute(context.style.width, context.style);
+    if (own != null) return own > 0 ? own : null;
+    final rows = _rowsOf(table, context);
+    if (rows.isEmpty) return null;
+    var total = 0.0;
+    for (final cell in _cellsOf(rows.first, context)) {
+      final cellCtx = context.builder.contextForDescendant(cell, context);
+      final extra = _horizontalBoxExtra(cellCtx.style, cellCtx);
+      final fixed = absolute(cellCtx.style.width, cellCtx.style);
+      if (fixed != null) {
+        total += fixed + extra;
+        continue;
+      }
+      if (cell.text.trim().isNotEmpty) return null;
+      final images = cell.querySelectorAll('img');
+      // A row of inline icons is as wide as its line, not its widest image.
+      if (images.length > 1) return null;
+      var widest = 0.0;
+      for (final image in images) {
+        final imageCtx = context.builder.contextForDescendant(image, cellCtx);
+        final px =
+            absolute(imageCtx.style.width, imageCtx.style) ??
+            double.tryParse(image.attributes['width'] ?? '');
+        if (px != null && px > widest) widest = px;
+      }
+      total += widest + extra;
+    }
+    return total > 0 ? total : null;
+  }
+
   double _floatColumnPercent(dom.Element table, HtmlRenderContext context) {
     double? absolute(CssLength? length, HtmlStyle style) {
       if (length == null ||
@@ -1287,6 +1365,7 @@ class TableHandler extends HtmlElementHandler {
       var imageOnly = true;
       var hasImageOnlyCell = false;
       var hasFillImage = false;
+      var hasPercentImage = false;
       var shrinkContentOnly = true;
       var hasShrinkContentCell = false;
       var rightAlignedOnly = true;
@@ -1306,6 +1385,7 @@ class TableHandler extends HtmlElementHandler {
           imageOnly = imageOnly && onlyImages;
           hasImageOnlyCell = hasImageOnlyCell || onlyImages;
           hasFillImage = hasFillImage || cell.content.hasFillImage;
+          hasPercentImage = hasPercentImage || cell.content.hasPercentImage;
           if (onlyImages && !cell.content.hasFillImage) {
             final minimum = _fixedImageMinimum(cell);
             if (minimum > imageFloor) imageFloor = minimum;
@@ -1335,7 +1415,7 @@ class TableHandler extends HtmlElementHandler {
           );
           if (px != null && (fixedPx == null || px > fixedPx)) {
             fixedPx = px;
-            fixedPad = _horizontalPadding(cellStyle, cell.ctx);
+            fixedPad = _horizontalBoxExtra(cellStyle, cell.ctx);
           }
         }
       }
@@ -1371,6 +1451,16 @@ class TableHandler extends HtmlElementHandler {
         final specified = fixedPx + fixedPad;
         widths[col] = _FixedOrMinContentColumnWidth(
           imageOnly && imageFloor > specified ? imageFloor : specified,
+          // Known rigid content (sized images, padding) that fitting the
+          // column to a narrower table must not cut into.
+          floor: imageOnly && imageFloor > fixedPad ? imageFloor : fixedPad,
+          // Only a table sized by its container (`%`/auto) narrows its fixed
+          // columns; a `width="600"` table keeps 600px and overflows, as in
+          // Chrome. fitToWidth lays a desktop email out at its natural width
+          // and scales the result, so there the widths stay rigid too.
+          shrinkFloor: context.config.fitToWidth || _hasPxWidth(context.style)
+              ? double.infinity
+              : fixedPad,
         );
       } else if (percent != null &&
           percent >= 100 &&
@@ -1421,7 +1511,7 @@ class TableHandler extends HtmlElementHandler {
       } else if (columns == 1 &&
           imageOnly &&
           hasImageOnlyCell &&
-          hasFillImage &&
+          (hasFillImage || hasPercentImage) &&
           !intrinsicColumns) {
         // A one-column image-only email section often relies on an inner
         // `img { width:100% }` to fill the section's fixed/percent table width.
@@ -1469,7 +1559,56 @@ class TableHandler extends HtmlElementHandler {
         );
       }
     }
+    _fitFixedColumnsToTable(widths, context);
     return (widths: widths, hasFlex: hasFlex);
+  }
+
+  static bool _hasPxWidth(HtmlStyle style) {
+    final width = style.width;
+    return width != null &&
+        !width.isAuto &&
+        width.unit != CssLengthUnit.percent &&
+        width.value > 0;
+  }
+
+  /// Cell widths are preferences inside a table of declared width: when the
+  /// fixed columns (content-box width + padding) add up to more than the
+  /// table, browsers narrow them to the table instead of widening the table
+  /// (two `width="300"` cells with 10px padding share a 600px table, 299/301).
+  /// Each column still keeps its min-content (see the column width class).
+  void _fitFixedColumnsToTable(
+    Map<int, TableColumnWidth> widths,
+    HtmlRenderContext context,
+  ) {
+    if (widths.isEmpty) return;
+    final columns = widths.values.whereType<_FixedOrMinContentColumnWidth>();
+    if (columns.length != widths.length || columns.any((c) => c.px <= 0)) {
+      return;
+    }
+    final style = context.style;
+    double? px(CssLength? length) =>
+        length == null || length.isAuto || length.unit == CssLengthUnit.percent
+        ? null
+        : length.resolve(
+            fontSize: style.resolvedFontSize,
+            rootFontSize: context.config.baseFontSize,
+          );
+    final width = style.width;
+    final percentWidth = width != null && width.unit == CssLengthUnit.percent;
+    final declared = px(width) ?? (percentWidth ? px(style.maxWidth) : null);
+    if (declared == null || declared <= 0) return;
+    final total = columns.fold<double>(0, (sum, c) => sum + c.px);
+    if (total <= declared + 0.5) return;
+    final scale = declared / total;
+    for (final entry in widths.entries.toList()) {
+      final column = entry.value as _FixedOrMinContentColumnWidth;
+      final fitted = column.px * scale;
+      widths[entry.key] = _FixedOrMinContentColumnWidth(
+        fitted > column.floor ? fitted : column.floor,
+        floor: column.floor,
+        shrinkFloor: column.shrinkFloor,
+      );
+    }
   }
 
   // --- Row-based fallback (colspan / ragged tables) ---
@@ -1688,7 +1827,7 @@ class TableHandler extends HtmlElementHandler {
               fontSize: style.resolvedFontSize,
               rootFontSize: context.config.baseFontSize,
             );
-            final borderBox = (px ?? 0) + _horizontalPadding(style, cellCtx);
+            final borderBox = (px ?? 0) + _horizontalBoxExtra(style, cellCtx);
             if (borderBox > hint.px) hint.px = borderBox;
           }
         }
@@ -1821,6 +1960,7 @@ class TableHandler extends HtmlElementHandler {
     var cellEls = _cellsOf(tr, context);
     if (rtl) cellEls = cellEls.reversed.toList();
     final singleCellRow = cellEls.length == 1;
+    final legacyCellBorder = _legacyCellBorder(context);
     var hasFlexible = false;
     for (var i = 0; i < cellEls.length; i++) {
       final cellEl = cellEls[i];
@@ -1868,7 +2008,7 @@ class TableHandler extends HtmlElementHandler {
           backgroundSize: style.backgroundSize,
           backgroundPosition: style.backgroundPosition,
           backgroundRepeat: style.backgroundRepeat,
-          borders: style.borders,
+          borders: style.borders ?? legacyCellBorder,
           borderRadius: style.borderRadius,
           borderRadiusPercent: style.borderRadiusPercent,
           borderRadiusGeometry: style.borderRadiusGeometry,
@@ -1887,11 +2027,13 @@ class TableHandler extends HtmlElementHandler {
       // a table sizing hint, not a cap on its final content box.
       final fullRowSpan = singleCellRow && colspan > 1;
       final fixed = !fullRowSpan && _cellIsFixed(cellCtx, spec);
-      if (!fixed) hasFlexible = true;
       final wrapped = _wrapCellLink(decorated, cellEl, cellCtx);
       final sized = singleCellRow && !fixed
           ? SizedBox(width: double.infinity, child: wrapped)
           : _sizedCell(cellEl, cellCtx, wrapped, spec);
+      // A flex child needs a bounded row, whatever the fixed-width estimate
+      // said; the shrink-to-fit branch below lays its row out unbounded.
+      if (!fixed || sized is Flexible) hasFlexible = true;
       if (sized is Expanded) {
         final percent = spec != null
             ? spec.percent
@@ -1966,9 +2108,26 @@ class TableHandler extends HtmlElementHandler {
     return row;
   }
 
+  /// `<table border="N">` also outlines every cell with 1px in browsers.
+  CssBorders? _legacyCellBorder(HtmlRenderContext tableCtx) {
+    final table = tableCtx.element;
+    if (table == null || table.localName != 'table') return null;
+    final width =
+        double.tryParse(table.attributes['border']?.trim() ?? '') ?? 0;
+    if (width <= 0) return null;
+    final side = CssBorderSide(
+      width: 1,
+      color: tableCtx.style.borders?.top?.color ?? const Color(0xff808080),
+    );
+    return CssBorders(top: side, right: side, bottom: side, left: side);
+  }
+
   /// Whether [_sizedCell] will give this cell a fixed (non-shrinkable) width.
   bool _cellIsFixed(HtmlRenderContext cellCtx, _ColSpec? column) {
-    if (column != null) return column.px > 0 || column.intrinsic;
+    // Mirrors [_sizedCell]: a percentage column flexes even when intrinsic.
+    if (column != null) {
+      return column.px > 0 || (column.percent <= 0 && column.intrinsic);
+    }
     final w = cellCtx.style.width;
     return w != null && !w.isAuto && w.unit != CssLengthUnit.percent;
   }
@@ -2056,7 +2215,9 @@ class TableHandler extends HtmlElementHandler {
       specs[j].intrinsic = regularRows.every((cells) {
         final cellCtx = context.builder.contextForDescendant(cells[j], context);
         final facts = _CellContentFacts.inspect(cells[j], cellCtx);
-        return facts.onlyImages && !facts.hasFillImage;
+        return facts.onlyImages &&
+            !facts.hasFillImage &&
+            !facts.hasPercentImage;
       });
     }
     for (final cs in regularRows) {
@@ -2076,7 +2237,7 @@ class TableHandler extends HtmlElementHandler {
             // Store the shared border-box width once. All rows then start their
             // next column at the same x even if a later cell omits width or has
             // different padding.
-            final borderBox = px + _horizontalPadding(style, cellCtx);
+            final borderBox = px + _horizontalBoxExtra(style, cellCtx);
             if (borderBox > specs[j].px) specs[j].px = borderBox;
           }
         }
@@ -2130,7 +2291,7 @@ class TableHandler extends HtmlElementHandler {
       // path's _FixedOrMinContentColumnWidth).
       if (px != null) {
         return SizedBox(
-          width: px + _horizontalPadding(cellCtx.style, cellCtx),
+          width: px + _horizontalBoxExtra(cellCtx.style, cellCtx),
           child: child,
         );
       }
@@ -2203,7 +2364,32 @@ class TableHandler extends HtmlElementHandler {
     }
     return minimum == 0
         ? 0
-        : minimum + _horizontalPadding(cell.ctx.style, cell.ctx);
+        : minimum + _horizontalBoxExtra(cell.ctx.style, cell.ctx);
+  }
+
+  /// What a cell adds around its content-box `width`: padding (or, without
+  /// CSS padding, the table's `cellpadding`, browser default 1px) and its
+  /// side borders. A `width="20"` spacer cell is 22px wide in a browser.
+  double _horizontalBoxExtra(HtmlStyle style, HtmlRenderContext ctx) {
+    if (style.boxSizing == CssBoxSizing.borderBox) return 0;
+    double border(CssBorderSide? side) =>
+        side == null ||
+            !side.width.isFinite ||
+            side.width <= 0 ||
+            side.style == CssBorderStyle.none
+        ? 0
+        : side.width;
+    final borders = border(style.borders?.left) + border(style.borders?.right);
+    if (style.padding != null) return _horizontalPadding(style, ctx) + borders;
+    final cell = ctx.element;
+    if (cell == null || (cell.localName != 'td' && cell.localName != 'th')) {
+      return borders;
+    }
+    var table = cell.parent;
+    while (table != null && table.localName != 'table') {
+      table = table.parent;
+    }
+    return _cellPaddingFor(table).horizontal + borders;
   }
 
   double _horizontalPadding(HtmlStyle style, HtmlRenderContext ctx) {
@@ -2399,6 +2585,18 @@ class TableHandler extends HtmlElementHandler {
     dom.Element table,
     HtmlRenderContext context,
   ) {
+    if (identical(context.element, table)) {
+      // The table's computed style already ranks the `cellspacing` hint
+      // below author `border-spacing`. The collapsing border model has no
+      // spacing at all (`table{border-collapse:collapse}` in most templates).
+      final style = context.style;
+      if (style.borderCollapse == true) return (h: 0.0, v: 0.0);
+      final h = style.borderSpacingH;
+      if (h != null) return (h: h, v: style.borderSpacingV ?? h);
+      final fallback = context.config.defaultTableCellSpacing;
+      return (h: fallback, v: fallback);
+    }
+    // A row rendered on its own (no table context): read the attributes.
     // Browsers clamp negative presentational hints to 0 (and Flutter's
     // EdgeInsets/SizedBox assert on negatives), so never let one through.
     final attr = double.tryParse(table.attributes['cellspacing'] ?? '');
@@ -2421,12 +2619,13 @@ class TableHandler extends HtmlElementHandler {
     return (h: fallback, v: fallback);
   }
 
+  // Browsers default `td, th { padding: 1px }` when `cellpadding` is absent.
   EdgeInsets _cellPaddingFor(dom.Element? table) {
-    if (table == null) return const EdgeInsets.all(2);
+    if (table == null) return const EdgeInsets.all(1);
     final raw = table.attributes['cellpadding'];
-    if (raw == null) return const EdgeInsets.all(2);
+    if (raw == null) return const EdgeInsets.all(1);
     final value = double.tryParse(raw);
-    if (value == null) return const EdgeInsets.all(2);
+    if (value == null) return const EdgeInsets.all(1);
     return EdgeInsets.all(value < 0 ? 0 : value);
   }
 
@@ -3051,9 +3250,23 @@ class _ShrinkToFitColumnWidth extends TableColumnWidth {
 }
 
 class _FixedOrMinContentColumnWidth extends TableColumnWidth {
-  const _FixedOrMinContentColumnWidth(this.px);
+  const _FixedOrMinContentColumnWidth(
+    this.px, {
+    this.floor = 0,
+    this.shrinkFloor = 0,
+  });
 
   final double px;
+
+  /// The least width [px] may be narrowed to when the table is narrower.
+  final double floor;
+
+  /// The cell box (padding, borders) a table too wide for its container may
+  /// shrink this column to, above the cells' own min-content. A specified
+  /// width is a preference, not a minimum: browsers narrow fixed columns
+  /// (and their `max-width:100%` images) before overflowing the line, e.g.
+  /// three `width="181"` product cells on a 375px screen.
+  final double shrinkFloor;
 
   double _target(Iterable<RenderBox> cells, double containerWidth) {
     var minContent = 0.0;
@@ -3083,8 +3296,17 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
   }
 
   @override
-  double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) =>
-      _target(cells, containerWidth);
+  double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    // RenderTable shrinks non-flex columns towards this only when the
+    // columns' preferred widths overflow the table's constraints.
+    var minContent = shrinkFloor;
+    for (final cell in cells) {
+      final c = cell.getMinIntrinsicWidth(double.infinity);
+      if (c > minContent) minContent = c;
+    }
+    final target = _target(cells, containerWidth);
+    return minContent < target ? minContent : target;
+  }
 
   @override
   double maxIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) =>
@@ -3136,12 +3358,18 @@ class _CellContentFacts {
     required this.hasContent,
     required this.onlyImages,
     required this.hasFillImage,
+    required this.hasPercentImage,
     required this.onlyInlineBlock,
   });
 
   final bool hasContent;
   final bool onlyImages;
   final bool hasFillImage;
+
+  /// An image sized as a percentage of its cell. Like a fill image it adds
+  /// no intrinsic width (CSS resolves it against the column), so an
+  /// image-only column holding one must not shrink-wrap to zero.
+  final bool hasPercentImage;
   final bool onlyInlineBlock;
 
   factory _CellContentFacts.inspect(
@@ -3152,6 +3380,7 @@ class _CellContentFacts {
     var onlyImages = true;
     var sawImage = false;
     var hasFillImage = false;
+    var hasPercentImage = false;
     var meaningfulChildren = 0;
     var inlineBlockChild = false;
 
@@ -3193,6 +3422,10 @@ class _CellContentFacts {
             hasFillImage ||
             (width?.unit == CssLengthUnit.percent && width!.value >= 99) ||
             (attrPercent != null && attrPercent >= 99);
+        hasPercentImage =
+            hasPercentImage ||
+            (width?.unit == CssLengthUnit.percent && width!.value > 0) ||
+            (width == null && attrPercent != null && attrPercent > 0);
         return;
       }
       for (final node in element.nodes) {
@@ -3217,6 +3450,7 @@ class _CellContentFacts {
       hasContent: hasContent,
       onlyImages: onlyImages && sawImage,
       hasFillImage: hasFillImage,
+      hasPercentImage: hasPercentImage,
       onlyInlineBlock: meaningfulChildren == 1 && inlineBlockChild,
     );
   }

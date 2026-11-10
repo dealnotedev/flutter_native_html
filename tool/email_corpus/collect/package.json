@@ -1,0 +1,16 @@
+{
+  "name": "email-corpus-collect",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Collects a pilot corpus of real-world HTML email bodies (caniemail tests, OSS templates, Common Crawl ESP archive pages).",
+  "scripts": {
+    "templates": "node collect_templates.mjs",
+    "commoncrawl": "node collect_commoncrawl.mjs",
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "mjml": "^4.18.0",
+    "parse5": "^7.3.0"
+  }
+}

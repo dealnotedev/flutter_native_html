@@ -23,8 +23,11 @@ class InlineResult extends HtmlBuildResult {
 
 /// A block-level widget that breaks the current text run.
 class BlockResult extends HtmlBuildResult {
-  const BlockResult(this.widget);
+  const BlockResult(this.widget, {this.clears = false});
   final Widget widget;
+
+  /// CSS `clear`: the block starts below pending floats instead of beside.
+  final bool clears;
 }
 
 /// An auto-sized CSS float sharing a row with the adjacent inline content.
@@ -39,9 +42,12 @@ class FloatResult extends HtmlBuildResult {
 /// (flex = [percent]) when they fit, or stacks them when they don't (e.g. each
 /// is 100% wide on a narrow layout).
 class ColumnResult extends HtmlBuildResult {
-  const ColumnResult(this.widget, this.percent, {this.float});
+  const ColumnResult(this.widget, this.percent, {this.float, this.floatWidth});
   final Widget widget;
   final double percent;
+
+  /// For a legacy `align` float table: the px width it asks for, if known.
+  final double? floatWidth;
 
   /// Side requested by CSS `float` for legacy email-layout columns.
   ///

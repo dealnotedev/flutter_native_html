@@ -576,9 +576,11 @@ void main() {
     expect(tester.getTopLeft(b).dx, greaterThan(tester.getTopLeft(a).dx));
   });
 
-  testWidgets('display:table div lays block icon children in one row', (
+  testWidgets('display:table div stacks block icon children like a browser', (
     tester,
   ) async {
+    // Block children of a table box share one anonymous cell (CSS 2.1
+    // §17.2.1), so Chrome, Gmail and Apple Mail stack these icons vertically.
     const png =
         'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ'
         'AAAADUlEQVR42mNk+M/wHwAF/gL+XQwAAAAASUVORK5CYII=';
@@ -598,10 +600,12 @@ void main() {
     expect(images, findsNWidgets(3));
     final imageWidgets = images.evaluate().map((e) => find.byWidget(e.widget));
     final rects = imageWidgets.map(tester.getRect).toList();
-    expect(rects[1].top, closeTo(rects[0].top, 1));
-    expect(rects[2].top, closeTo(rects[0].top, 1));
-    expect(rects[1].left, greaterThan(rects[0].right));
-    expect(rects[2].left, greaterThan(rects[1].right));
+    expect(rects[1].top, greaterThanOrEqualTo(rects[0].bottom));
+    expect(rects[2].top, greaterThanOrEqualTo(rects[1].bottom));
+    // The first icon is centred in its full-width block; the others start left.
+    final box = tester.getRect(find.byType(HtmlEmailView));
+    expect(rects[0].center.dx, closeTo(box.center.dx, 1));
+    expect(rects[1].left, closeTo(box.left, 1));
   });
 
   testWidgets('display:table row follows the box alignment, not always center', (

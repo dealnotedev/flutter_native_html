@@ -64,7 +64,9 @@ void main() {
     expect(imageRects, hasLength(2));
     for (var i = 0; i < emojiCells.length; i++) {
       final cellRect = tester.getRect(find.byWidget(emojiCells[i]));
-      expect(cellRect.size, const Size(118, 118));
+      // `width/height:118px` is the content box; the 1px dashed border adds
+      // to it, as in Chrome (120x120).
+      expect(cellRect.size, const Size(120, 120));
       expect(imageRects[i].center.dy, closeTo(cellRect.center.dy, 0.01));
       expect(imageRects[i].center.dx, closeTo(cellRect.center.dx, 0.01));
     }

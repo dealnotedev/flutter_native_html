@@ -1,0 +1,18 @@
+{
+  "name": "email-corpus-harness",
+  "private": true,
+  "type": "module",
+  "description": "Browser-parity harness: renders an email corpus in headless Chrome and in flutter_native_html, then compares layout dumps.",
+  "scripts": {
+    "fonts": "node fonts.mjs",
+    "assets": "node assets.mjs",
+    "chrome": "node chrome_capture.mjs",
+    "flutter": "node run_flutter.mjs",
+    "compare": "node compare.mjs"
+  },
+  "dependencies": {
+    "diff": "^7.0.0",
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^24.0.0"
+  }
+}

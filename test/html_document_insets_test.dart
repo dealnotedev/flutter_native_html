@@ -80,7 +80,8 @@ Hello</td></tr></table></td></tr></table>''').insets,
       expect(
         estimate('''
 <table width="100%" cellspacing="3"><tr><td>Hello</td></tr></table>''').insets,
-        const EdgeInsets.all(5),
+        // 3px spacing + the browser's default 1px cell padding.
+        const EdgeInsets.all(4),
       );
     },
   );
