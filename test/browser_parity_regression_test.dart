@@ -601,6 +601,46 @@ void main() {
     expect(text.top, lessThan(image.bottom));
   });
 
+  group('long words', () {
+    const url = 'https://www.extolecommunity.example/unsubscribe/link/token';
+
+    for (final css in ['word-break:break-all', 'word-break:break-word']) {
+      testWidgets('$css lets a shrink-to-fit cell break the word', (
+        tester,
+      ) async {
+        // Chrome: these properties drop the word's min-content, so a
+        // widthless (shrink-to-fit) table stays inside the screen.
+        await _pump(
+          tester,
+          '<table align="center" cellpadding="0" cellspacing="0"><tr>'
+          '<td style="$css;font-size:16px">$url</td></tr></table>',
+        );
+        expect(tester.takeException(), isNull);
+        final text = tester.getRect(find.textContaining('extole'));
+        expect(text.right, lessThanOrEqualTo(375.5));
+        expect(text.left, greaterThanOrEqualTo(-0.5));
+      });
+    }
+
+    testWidgets('overflow-wrap:break-word keeps the min-content word', (
+      tester,
+    ) async {
+      // Browsers break it only at layout: a short word still sets the
+      // column's minimum, so two such cells keep their words whole.
+      await _pump(
+        tester,
+        '<table cellpadding="0" cellspacing="0"><tr>'
+        '<td style="word-wrap:break-word;font-size:16px">Alpha</td>'
+        '<td style="font-size:16px">Beta</td></tr></table>',
+        width: 680,
+      );
+      final alpha = tester.getRect(find.textContaining('Alpha'));
+      final beta = tester.getRect(find.textContaining('Beta'));
+      expect(alpha.height, lessThan(30));
+      expect(beta.left, greaterThanOrEqualTo(alpha.right - 0.5));
+    });
+  });
+
   testWidgets('a fixed 40|600|40 row narrows on a phone instead of scaling', (
     tester,
   ) async {

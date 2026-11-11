@@ -17,6 +17,7 @@ import 'html_build_result.dart';
 import 'html_render_context.dart';
 import 'layout/equal_height_row.dart';
 import 'layout/float_flow.dart';
+import 'layout/min_content_cap.dart';
 import 'layout/negative_margin.dart';
 import 'layout/percent_boxes.dart';
 
@@ -1275,13 +1276,25 @@ class HtmlTreeBuilder {
             plain.trim().isEmpty &&
             (containerStyle.lineHeightPx == 0 ||
                 containerStyle.lineHeight == 0);
+        // `word-break: break-all | break-word` / `overflow-wrap: anywhere`:
+        // a word may break anywhere, so it adds no min-content and a table
+        // cell or shrink-to-fit box does not grow to fit a long URL.
+        // (fitToWidth measures the natural width on purpose, and `nowrap`
+        // text cannot break at all, so neither is capped.)
+        final capped =
+            containerStyle.breakAnywhere == true &&
+                !config.fitToWidth &&
+                !containerStyle.preventsWrapping
+            ? MinContentCap(
+                cap: containerStyle.resolvedFontSize,
+                child: paragraph,
+              )
+            : paragraph;
         // Preserve the intrinsic width of a nonbreaking-space sizing hack,
         // while respecting its zero CSS line box. No visible glyph is clipped.
         target.add(
           withFloats(
-            zeroWhitespaceLine
-                ? SizedBox(height: 0, child: paragraph)
-                : paragraph,
+            zeroWhitespaceLine ? SizedBox(height: 0, child: capped) : capped,
           ),
         );
       } else if (floats.isNotEmpty) {

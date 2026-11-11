@@ -73,6 +73,7 @@ class CssDeclarationMapper {
     String? verticalAlign;
     TextDirection? textDirection;
     CssWhiteSpace? whiteSpace;
+    bool? breakAnywhere;
     bool? visibilityHidden;
     bool? pointerEventsNone;
     String? listStyleType;
@@ -311,6 +312,20 @@ class CssDeclarationMapper {
           break;
         case 'white-space':
           whiteSpace = _whiteSpace(value) ?? whiteSpace;
+          break;
+        case 'word-break':
+          switch (value.trim().toLowerCase()) {
+            case 'break-all' || 'break-word':
+              breakAnywhere = true;
+            case 'normal' || 'keep-all':
+              breakAnywhere = false;
+          }
+          break;
+        case 'overflow-wrap':
+        case 'word-wrap':
+          // Only `anywhere` changes min-content; `break-word` breaks a word
+          // at layout without letting a table column shrink below it.
+          if (value.trim().toLowerCase() == 'anywhere') breakAnywhere = true;
           break;
         case 'pointer-events':
           final v = value.trim().toLowerCase();
@@ -631,6 +646,7 @@ class CssDeclarationMapper {
       verticalAlign: verticalAlign,
       textDirection: textDirection,
       whiteSpace: whiteSpace,
+      breakAnywhere: breakAnywhere,
       visibilityHidden: visibilityHidden,
       pointerEventsNone: pointerEventsNone,
       listStyleType: listStyleType,
