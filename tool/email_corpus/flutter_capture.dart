@@ -170,9 +170,17 @@ Future<void> _captureJob(
       defaultFontFamily: cfg['defaultFontFamily'] as String?,
     );
     final watch = Stopwatch()..start();
+    final textScale = (cfg['textScale'] as num?)?.toDouble() ?? 1.0;
     await tester.pumpWidget(
       MaterialApp(
         debugShowCheckedModeBanner: false,
+        // `--text-scale 1.5`: the phone's accessibility font size.
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(textScale),
+          ),
+          child: child!,
+        ),
         home: Material(
           color: const Color(0xffffffff),
           child: SingleChildScrollView(

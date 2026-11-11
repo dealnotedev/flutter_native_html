@@ -200,6 +200,7 @@ buckets.forEach((bucket, shard) => {
       ...flutterConfig,
       colorMode: option('--color-mode', 'original'),
       brightness: option('--brightness', 'light'),
+      textScale: Number(option('--text-scale', '1')),
     },
     // --no-png: layout dumps only (the report then shows no Flutter screenshot).
     png: !args.includes('--no-png'),
