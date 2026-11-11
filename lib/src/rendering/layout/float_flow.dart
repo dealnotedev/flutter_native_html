@@ -4,19 +4,22 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 /// A CSS float with the block content after it, at block granularity: the
-/// first child is the float (at most half the line, [floatWidth] wide), and
-/// each following block sits beside it while it starts above the float's
-/// bottom, then takes the full width below it. Browsers wrap per line; a
-/// block that starts beside the float stays narrow here to its end.
+/// first child is the float, and each following block sits beside it while
+/// it starts above the float's bottom, then takes the full width below it.
+/// Browsers wrap per line; a block that starts beside the float stays narrow
+/// here to its end, unless it would mostly run on below the float or cannot
+/// fit its longest word beside it — then it starts under the float.
 class FloatFlow extends MultiChildRenderObjectWidget {
   const FloatFlow({
     super.key,
-    required this.floatWidth,
+    this.floatWidth,
     required this.right,
     required super.children,
   });
 
-  final double floatWidth;
+  /// A legacy `align` table's known width, kept to at most half the line.
+  /// Null sizes the float to its own (intrinsic) width, up to the line.
+  final double? floatWidth;
   final bool right;
 
   @override
@@ -37,12 +40,12 @@ class RenderFloatFlow extends RenderBox
     with
         ContainerRenderObjectMixin<RenderBox, _FloatFlowParentData>,
         RenderBoxContainerDefaultsMixin<RenderBox, _FloatFlowParentData> {
-  RenderFloatFlow({required double floatWidth, required bool right})
+  RenderFloatFlow({required double? floatWidth, required bool right})
     : _floatWidth = floatWidth, // ignore: prefer_initializing_formals
       _right = right; // ignore: prefer_initializing_formals
 
-  double _floatWidth;
-  set floatWidth(double value) {
+  double? _floatWidth;
+  set floatWidth(double? value) {
     if (value == _floatWidth) return;
     _floatWidth = value;
     markNeedsLayout();
@@ -62,8 +65,12 @@ class RenderFloatFlow extends RenderBox
     }
   }
 
-  double _floatSlot(double width) =>
-      width.isFinite ? math.min(_floatWidth, width / 2) : _floatWidth;
+  double _floatSlot(double width) {
+    final fixed = _floatWidth;
+    if (fixed != null) return width.isFinite ? math.min(fixed, width / 2) : fixed;
+    final own = firstChild?.getMaxIntrinsicWidth(double.infinity) ?? 0;
+    return width.isFinite ? math.min(own, width) : own;
+  }
 
   /// Lays out every child for [width] (or, when [measure], only estimates
   /// heights from intrinsics, as Column does); returns the total height.
@@ -95,10 +102,20 @@ class RenderFloatFlow extends RenderBox
       return child.size.height;
     }
 
+    // A sliver beside a wide float (a 240px image in a 340px cell) breaks
+    // words inside ("De shna") for the whole block; a browser would move
+    // most of those lines below the float, so content starts there. (The
+    // longest word would be the exact test, but a paragraph's intrinsic
+    // width dry-lays out its inline boxes, which a Transform cannot do.)
+    final roomBeside = besideWidth >= math.max(120.0, width * 0.3);
     var y = 0.0;
     var child = childAfter(float);
     while (child != null) {
       var beside = y < floatSize.height;
+      if (beside && !roomBeside) {
+        beside = false;
+        y = floatSize.height;
+      }
       var height = heightFor(child, beside ? besideWidth : width);
       // A browser wraps only the lines beside the float; a block can't
       // split here, so one that would mostly run on below the float starts
@@ -160,7 +177,8 @@ class RenderFloatFlow extends RenderBox
   double computeMaxIntrinsicWidth(double height) {
     final float = firstChild;
     if (float == null) return 0;
-    return _floatWidth + _widest((c) => c.getMaxIntrinsicWidth(height));
+    return (_floatWidth ?? float.getMaxIntrinsicWidth(height)) +
+        _widest((c) => c.getMaxIntrinsicWidth(height));
   }
 
   @override

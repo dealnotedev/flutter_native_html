@@ -1127,6 +1127,17 @@ class HtmlTreeBuilder {
     final floats = <FloatResult>[];
     Widget withFloats(Widget paragraph) {
       if (floats.isEmpty) return paragraph;
+      if (floats.length == 1) {
+        // One float (`<div style="float:right"><img width=240></div>` before
+        // a paragraph): the text goes under it where it cannot fit beside,
+        // instead of a word-breaking sliver for its whole length.
+        final float = floats.single;
+        floats.clear();
+        return FloatFlow(
+          right: float.side == 'right',
+          children: [float.widget, paragraph],
+        );
+      }
       final left = floats
           .where((f) => f.side == 'left')
           .map((f) => f.widget)

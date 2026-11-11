@@ -556,6 +556,51 @@ void main() {
     expect(opacity.opacity, 0);
   });
 
+  testWidgets('text that cannot fit beside a wide float goes under it', (
+    tester,
+  ) async {
+    // Mailchimp RSS item: a 240px `float:right` image before the text in a
+    // ~340px cell. The whole paragraph used to stay in the ~90px left beside
+    // the image, breaking words ("De shna"); browsers put it under the image.
+    await _pump(
+      tester,
+      '<div style="padding:0 18px;font-size:15px;line-height:150%">'
+      '<div style="float:right;margin-left:10px"><img '
+      'src="https://example.com/p.png" width="240" height="200"></div>'
+      '7-year-old Deshna Aditya Nahar has quite the ability: she is small '
+      'and flexible enough to rollerskate underneath cars, and set a new '
+      'world record for the fastest time to limbo skate under twenty cars.'
+      '</div>',
+      config: HtmlRenderConfig(
+        enableTextSelection: false,
+        imageResolver: _Images(MemoryImage(png)),
+      ),
+    );
+    expect(tester.takeException(), isNull);
+    final image = tester.getRect(find.byType(Image));
+    final text = tester.getRect(find.textContaining('Deshna'));
+    expect(image.right, closeTo(375 - 18, 1));
+    expect(text.top, greaterThanOrEqualTo(image.bottom - 0.5));
+    expect(text.left, closeTo(18, 0.5));
+    expect(text.width, greaterThan(300));
+  });
+
+  testWidgets('text still wraps beside a narrow float', (tester) async {
+    await _pump(
+      tester,
+      '<div><div style="float:left"><img src="https://example.com/p.png" '
+      'width="80" height="60"></div>Short caption beside a small icon.</div>',
+      config: HtmlRenderConfig(
+        enableTextSelection: false,
+        imageResolver: _Images(MemoryImage(png)),
+      ),
+    );
+    final image = tester.getRect(find.byType(Image));
+    final text = tester.getRect(find.textContaining('Short caption'));
+    expect(text.left, greaterThanOrEqualTo(image.right - 0.5));
+    expect(text.top, lessThan(image.bottom));
+  });
+
   testWidgets('a clear:both wrapper puts its float under the previous one', (
     tester,
   ) async {
