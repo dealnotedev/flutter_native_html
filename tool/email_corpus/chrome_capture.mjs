@@ -24,6 +24,12 @@ const run = option('--run', 'pilot');
 const concurrency = Number(option('--concurrency', '8'));
 const force = args.includes('--force');
 const filter = option('--filter') ? new RegExp(option('--filter')) : null;
+// Dark-mode references: `--scheme dark` emulates prefers-color-scheme (the
+// CSS standard: author dark styles, `color-scheme` canvas); `--auto-dark`
+// adds Chromium's algorithmic darkening (Android WebView's force dark),
+// which applies at paint time, so only the screenshot shows its colors.
+const scheme = option('--scheme', null);
+const autoDark = args.includes('--auto-dark');
 const outDir = path.join(runDir(run), 'chrome');
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -250,6 +256,7 @@ function dumpLayout() {
   out.docWidth = Math.max(docEl.scrollWidth, document.body.scrollWidth);
   out.docHeight = Math.max(docEl.scrollHeight, document.body.scrollHeight);
   out.compatMode = document.compatMode;
+  out.colorScheme = getComputedStyle(docEl).colorScheme;
   return out;
 }
 
@@ -313,6 +320,8 @@ await Promise.all(
     const client = await page.createCDPSession();
     // Monospace like the renderer's Windows mapping (Chrome's own default is Consolas).
     await client.send('Page.setFontFamilies', { fontFamilies: { fixed: 'Courier New' } });
+    if (scheme) await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
+    if (autoDark) await client.send('Emulation.setAutoDarkModeOverride', { enabled: true });
     while (next < jobs.length) {
       const { email, width } = jobs[next++];
       try {

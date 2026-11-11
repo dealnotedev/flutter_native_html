@@ -194,7 +194,13 @@ buckets.forEach((bucket, shard) => {
   const spec = {
     outDir: outDir.replace(/\\/g, '/'),
     assetsDir: assetsDir.replace(/\\/g, '/'),
-    config: flutterConfig,
+    // `--color-mode auto|dark|original` and `--brightness dark` render the
+    // dark presentation for the dark-mode comparison (dark_compare.mjs).
+    config: {
+      ...flutterConfig,
+      colorMode: option('--color-mode', 'original'),
+      brightness: option('--brightness', 'light'),
+    },
     // --no-png: layout dumps only (the report then shows no Flutter screenshot).
     png: !args.includes('--no-png'),
     fonts: [...registrations(bucket.aliases, bucket.names)].map(([family, files]) => ({ name: family, files })),

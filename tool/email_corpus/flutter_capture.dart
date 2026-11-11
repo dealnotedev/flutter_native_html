@@ -157,7 +157,12 @@ Future<void> _captureJob(
     final boundary = GlobalKey();
     final config = HtmlRenderConfig(
       imageResolver: images,
-      colorMode: HtmlEmailColorMode.original,
+      // Layout runs compare the light presentation; dark runs pass
+      // `--color-mode auto|dark --brightness dark` (an app in dark theme).
+      colorMode: HtmlEmailColorMode.values.byName(
+        cfg['colorMode'] as String? ?? 'original',
+      ),
+      brightness: cfg['brightness'] == 'dark' ? Brightness.dark : null,
       enableTextSelection: false,
       fitToWidth: false,
       baseFontSize: (cfg['baseFontSize'] as num).toDouble(),
