@@ -1,12 +1,17 @@
 // Renders each corpus email in headless Chrome and writes a layout dump + PNG.
-// Usage: node chrome_capture.mjs <manifest.jsonl|dir> --run <name> [--concurrency 8] [--force] [--filter re]
+// Usage: node chrome_capture.mjs <manifest.jsonl|dir> --run <name>
+//   [--scheme light|dark] [--auto-dark] [--concurrency 8] [--force] [--filter re]
 import fs from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import {
   assetsDir,
+  captureKey,
+  captureSettings,
   chromePath,
   chromeShimCss,
+  clearCapture,
+  hasCachedCapture,
   jobKey,
   loadCorpus,
   readJson,
@@ -30,8 +35,11 @@ const filter = option('--filter') ? new RegExp(option('--filter')) : null;
 // which applies at paint time, so only the screenshot shows its colors.
 const scheme = option('--scheme', null);
 const autoDark = args.includes('--auto-dark');
+if (args.includes('--scheme') && !['light', 'dark'].includes(scheme)) {
+  throw new Error('--scheme must be light or dark');
+}
 const outDir = path.join(runDir(run), 'chrome');
-fs.mkdirSync(outDir, { recursive: true });
+const settingsKey = captureSettings(outDir, { scheme, autoDark, chromePath, chromeShimCss });
 
 const assetIndex = readJson(path.join(assetsDir, 'index.json'), {});
 const ORIGIN = 'http://email.test/';
@@ -262,9 +270,11 @@ function dumpLayout() {
 
 async function captureOne(page, email, width) {
   const key = jobKey(email.id, width);
-  const jsonFile = path.join(outDir, key + '.json');
-  if (!force && fs.existsSync(jsonFile)) return 'cached';
+  const base = path.join(outDir, key);
   const html = prepareHtml(fs.readFileSync(email.file, 'utf8'));
+  const cacheKey = captureKey(settingsKey, html);
+  if (!force && hasCachedCapture(base, cacheKey)) return 'cached';
+  clearCapture(base);
   page.removeAllListeners('request');
   page.on('request', (request) => {
     const url = request.url();
@@ -294,11 +304,12 @@ async function captureOne(page, email, width) {
   dump.ms = Date.now() - started;
   const height = Math.min(Math.max(dump.docHeight, 1), 16000);
   await page.screenshot({
-    path: path.join(outDir, key + '.png'),
+    path: base + '.png',
     clip: { x: 0, y: 0, width, height },
     captureBeyondViewport: true,
   });
-  fs.writeFileSync(jsonFile, JSON.stringify(dump));
+  dump.capture = { key: cacheKey, settingsKey, complete: true, png: true };
+  fs.writeFileSync(base + '.json', JSON.stringify(dump));
   return 'ok';
 }
 

@@ -10,6 +10,8 @@ import 'css_variables.dart';
 import 'email_color_transform.dart';
 import 'html_style.dart';
 
+enum _BitmapBackdrop { visible, behindOpacityGroup }
+
 /// Runs the CSS cascade for a single element.
 ///
 /// Order (lowest priority first): inherited parent text properties → user-agent
@@ -56,7 +58,7 @@ class StyleResolver {
   final _declarationCache = <dom.Element, Map<String, String>>{};
   final _variables = <dom.Element, CssVariables>{};
   final _backgrounds = <dom.Element, Color>{};
-  final _imageBackgrounds = <dom.Element, bool>{};
+  final _imageBackgrounds = <dom.Element, _BitmapBackdrop>{};
   final _sourceStyles = <dom.Element, HtmlStyle>{};
   late final _sourceResolver = StyleResolver(
     stylesheet: stylesheet,
@@ -132,7 +134,7 @@ class StyleResolver {
   }
 
   Color readableColor(Color color, dom.Element? element) =>
-      (_imageBackgrounds[element] ?? false)
+      _imageBackgrounds.containsKey(element)
       ? color
       : colorTransform?.foreground(
               color,
@@ -234,12 +236,22 @@ class StyleResolver {
     // An opaque background of its own covers the bitmap behind it: a white
     // content panel inside a patterned `<td background>` (Constant Contact)
     // adapts like any other surface instead of staying light in dark mode.
-    final ownBackground = result.backgroundColor;
-    final hasImage =
-        result.backgroundImage != null ||
-        ((_imageBackgrounds[element.parent] ?? false) &&
-            (ownBackground == null || ownBackground.a < 0.99));
-    _imageBackgrounds[element] = hasImage;
+    final inheritedBitmap = _imageBackgrounds[element.parent];
+    final translucent = (result.opacity ?? 1) < 1;
+    final bitmap = switch ((inheritedBitmap, translucent)) {
+      (_BitmapBackdrop.behindOpacityGroup, _) ||
+      (_BitmapBackdrop.visible, true) => _BitmapBackdrop.behindOpacityGroup,
+      _ when result.backgroundImage != null => _BitmapBackdrop.visible,
+      (_BitmapBackdrop.visible, false) when result.backgroundColor?.a != 1 =>
+        _BitmapBackdrop.visible,
+      _ => null,
+    };
+    if (bitmap == null) {
+      _imageBackgrounds.remove(element);
+    } else {
+      _imageBackgrounds[element] = bitmap;
+    }
+    final hasImage = bitmap != null;
     if (colorTransform != null && hasImage) {
       // Bitmap contrast is unknown. Preserve source colors across its backdrop.
       final source = _sourceStyleFor(element);

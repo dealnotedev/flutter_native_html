@@ -6,6 +6,7 @@ import '../../css/css_length.dart';
 import '../../css/html_style.dart';
 import '../element_handler.dart';
 import '../html_build_result.dart';
+import '../text_wrapping.dart';
 import '../html_render_context.dart';
 import '../layout/percent_boxes.dart';
 import 'handler_utils.dart';
@@ -319,13 +320,11 @@ class AnchorHandler extends HtmlElementHandler {
   ) {
     if (span is TextSpan) {
       final hasText = span.text != null;
-      return TextSpan(
-        text: span.text,
-        style: span.style,
+      return copyTextSpan(
+        span,
         recognizer: hasText ? recognizer : span.recognizer,
         // Hand cursor on hover for the tappable text, matching block links.
-        mouseCursor: hasText ? SystemMouseCursors.click : span.mouseCursor,
-        semanticsLabel: span.semanticsLabel,
+        cursor: hasText ? SystemMouseCursors.click : span.mouseCursor,
         children: span.children
             ?.map((child) => _attachRecognizer(child, recognizer, onTap))
             .toList(),

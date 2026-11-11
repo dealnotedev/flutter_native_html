@@ -55,6 +55,37 @@ export const flutterConfig = {
 
 export const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex');
 
+export function captureSettings(dir, settings) {
+  const key = sha256(JSON.stringify(settings));
+  writeJson(path.join(dir, '_capture.json'), { key, settings });
+  return key;
+}
+
+export function currentCaptureSettings(dir) {
+  return readJson(path.join(dir, '_capture.json'), null)?.key;
+}
+
+export function captureKey(settingsKey, html) {
+  return sha256(settingsKey + sha256(html));
+}
+
+export function matchesCaptureSettings(dump, settingsKey) {
+  return !settingsKey || dump?.capture?.settingsKey === settingsKey;
+}
+
+export function hasCachedCapture(base, key) {
+  const capture = readJson(base + '.json', null)?.capture;
+  return capture?.key === key && capture.complete === true &&
+    (capture.png === false || fs.existsSync(base + '.png'));
+}
+
+// JSON is the completion marker. Invalidate it before touching the old PNG,
+// so an interrupted or layout-only capture cannot publish a stale pair.
+export function clearCapture(base) {
+  fs.rmSync(base + '.json', { force: true });
+  fs.rmSync(base + '.png', { force: true });
+}
+
 export function readJson(file, fallback) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));

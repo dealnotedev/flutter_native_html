@@ -1,10 +1,11 @@
 // Regressions found by the browser-parity corpus harness (tool/email_corpus).
 // Each case is a synthetic reduction of a public email that rendered
 // differently from Chrome.
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_native_html/flutter_native_html.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -601,8 +602,146 @@ void main() {
     expect(text.top, lessThan(image.bottom));
   });
 
+  testWidgets('short text fits in less than 120px beside either float', (
+    tester,
+  ) async {
+    for (final html in [
+      '<div><div style="float:left"><div style="width:90px;height:90px">'
+          '</div></div>OK</div>',
+      '<table align="left" width="90" height="90" cellpadding="0" '
+          'cellspacing="0"><tr><td>Float</td></tr></table><div>OK</div>',
+    ]) {
+      await _pump(tester, html, width: 200);
+      expect(tester.getTopLeft(find.text('OK')), const Offset(90, 0));
+    }
+  });
+
   group('long words', () {
     const url = 'https://www.extolecommunity.example/unsubscribe/link/token';
+    const word = 'abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz';
+
+    testWidgets('overflow-wrap and word-break cascade independently', (
+      tester,
+    ) async {
+      for (final css in [
+        'overflow-wrap:anywhere;word-break:normal',
+        'word-break:normal;overflow-wrap:anywhere',
+      ]) {
+        await _pump(
+          tester,
+          '<table align="center" cellspacing="0"><tr>'
+          '<td style="$css;font-size:16px">$word</td></tr></table>',
+        );
+        expect(tester.getRect(find.text(word)).right, lessThanOrEqualTo(375));
+      }
+    });
+
+    testWidgets('overflow-wrap is inherited and can be reset', (tester) async {
+      await _pump(
+        tester,
+        '<table align="center" cellspacing="0" style="overflow-wrap:anywhere">'
+        '<tr><td style="overflow-wrap:normal;font-size:16px">$word</td>'
+        '</tr></table>',
+      );
+      expect(tester.getSize(find.text(word)).width, greaterThan(375));
+    });
+
+    testWidgets('overflow-wrap anywhere works on an inline link', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        '<table align="center" cellspacing="0"><tr><td style="font-size:16px">'
+        '<a href="https://example.com" style="overflow-wrap:anywhere">$word</a>'
+        '</td></tr></table>',
+      );
+      expect(tester.getRect(find.text(word)).right, lessThanOrEqualTo(375));
+    });
+
+    testWidgets('break-all fills the current line before wrapping', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        '<div style="width:128px;word-break:break-all;font-size:16px">'
+        'aaaaa <b>bbbbb</b></div>',
+      );
+      final paragraph = tester.renderObject<RenderParagraph>(
+        find.byType(RichText).last,
+      );
+      final text = paragraph.text.toPlainText(includeSemanticsLabels: false);
+      final nextWord = text.indexOf('b');
+      final first = paragraph.getBoxesForSelection(
+        const TextSelection(baseOffset: 0, extentOffset: 1),
+      );
+      final next = paragraph.getBoxesForSelection(
+        TextSelection(baseOffset: nextWord, extentOffset: nextWord + 1),
+      );
+      expect(next.single.top, first.single.top);
+      expect(paragraph.text.toPlainText(), 'aaaaa bbbbb');
+    });
+
+    testWidgets('anywhere preserves the min-content of a nowrap inline box', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        '<table align="center" cellpadding="0" cellspacing="0">'
+        '<tr><td style="overflow-wrap:anywhere;font-size:16px">'
+        'abc <span style="white-space:nowrap">AAAA BBBB CCCC</span>'
+        '</td></tr></table>',
+        width: 150,
+      );
+      expect(
+        tester.getSize(find.text('AAAA BBBB CCCC')).width,
+        greaterThanOrEqualTo(224),
+      );
+    });
+
+    testWidgets('break-all leaves copied text and link targets intact', (
+      tester,
+    ) async {
+      String? clipboard;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'Clipboard.setData') {
+          clipboard = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      String? tapped;
+      await _pump(
+        tester,
+        '<div style="width:128px;word-break:break-all;font-size:16px">'
+        'aaaaa <a href="https://example.com">bbbbb</a></div>',
+        config: HtmlRenderConfig(onLinkTap: (url, _) => tapped = url),
+      );
+      final paragraph = tester.renderObject<RenderParagraph>(
+        find.byType(RichText).last,
+      );
+      final display = paragraph.text.toPlainText(includeSemanticsLabels: false);
+      final offset = display.indexOf('b');
+      final boxes = paragraph.getBoxesForSelection(
+        TextSelection(baseOffset: offset, extentOffset: offset + 1),
+      );
+      await tester.tapAt(paragraph.localToGlobal(boxes.single.toRect().center));
+      expect(tapped, 'https://example.com');
+      await tester.pumpAndSettle();
+      final selection = tester.state<SelectableRegionState>(
+        find.byType(SelectableRegion),
+      );
+      selection.selectAll(SelectionChangedCause.keyboard);
+      Actions.invoke(
+        tester.element(find.byType(RichText).last),
+        CopySelectionTextIntent.copy,
+      );
+      await tester.pump();
+      expect(clipboard, 'aaaaa bbbbb');
+    });
 
     for (final css in ['word-break:break-all', 'word-break:break-word']) {
       testWidgets('$css lets a shrink-to-fit cell break the word', (
@@ -675,6 +814,45 @@ void main() {
       tester.getRect(find.textContaining('Narrow content')).left,
       closeTo(40, 0.5),
     );
+  });
+
+  testWidgets('a narrow fixed row preserves its nowrap cell minimum', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      '<table cellpadding="0" cellspacing="0"><tr>'
+      '<td width="90" style="white-space:nowrap;font-size:16px">AA BB</td>'
+      '<td width="360">NEIGHBOR</td></tr>'
+      '<tr><td colspan="2">Footer</td></tr></table>',
+      width: 200,
+    );
+    final paragraph = tester.renderObject<RenderParagraph>(find.text('AA BB'));
+    final bounds = paragraph.getBoxesForSelection(
+      const TextSelection(baseOffset: 0, extentOffset: 5),
+    );
+    expect(
+      paragraph.localToGlobal(bounds.single.toRect().topRight).dx,
+      lessThanOrEqualTo(tester.getTopLeft(find.text('NEIGHBOR')).dx + 0.01),
+    );
+    expect(paragraph.size.width, greaterThanOrEqualTo(80));
+  });
+
+  testWidgets('fixed rows keep content when spacing exceeds the viewport', (
+    tester,
+  ) async {
+    await _pump(
+      tester,
+      '<table cellpadding="0" cellspacing="40"><tr><td width="40">AAA</td>'
+      '<td width="600">BBB</td><td width="40">CCC</td></tr>'
+      '<tr><td colspan="3">Footer</td></tr></table>',
+      width: 140,
+    );
+    for (final word in ['AAA', 'BBB', 'CCC']) {
+      final rect = tester.getRect(find.text(word));
+      expect(rect.width, greaterThan(0));
+      expect(rect.right, lessThanOrEqualTo(140.01));
+    }
   });
 
   testWidgets('a clear:both wrapper puts its float under the previous one', (

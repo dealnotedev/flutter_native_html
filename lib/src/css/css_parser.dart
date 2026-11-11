@@ -183,7 +183,8 @@ class CssParser {
       final colon = part.indexOf(':');
       if (colon <= 0) continue;
       final name = part.substring(0, colon).trim();
-      final prop = name.startsWith('--') ? name : name.toLowerCase();
+      final lower = name.startsWith('--') ? name : name.toLowerCase();
+      final prop = lower == 'word-wrap' ? 'overflow-wrap' : lower;
       var value = part.substring(colon + 1).trim();
       if (prop.isEmpty || value.isEmpty) continue;
       final hadImportant = _importantPattern.hasMatch(value);

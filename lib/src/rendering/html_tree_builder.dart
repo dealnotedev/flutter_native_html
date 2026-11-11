@@ -17,9 +17,10 @@ import 'html_build_result.dart';
 import 'html_render_context.dart';
 import 'layout/equal_height_row.dart';
 import 'layout/float_flow.dart';
-import 'layout/min_content_cap.dart';
 import 'layout/negative_margin.dart';
+import 'layout/paragraph_min_width.dart';
 import 'layout/percent_boxes.dart';
+import 'text_wrapping.dart';
 
 /// Walks the sanitized DOM and produces the Flutter widget tree.
 ///
@@ -306,8 +307,32 @@ class HtmlTreeBuilder {
     HtmlStyle inherited,
     dom.Element? parent,
   ) {
+    final wrapping = inherited.preventsWrapping
+        ? null
+        : switch (inherited.wordBreak) {
+            CssWordBreak.breakAll => TextWrapping.breakAll,
+            CssWordBreak.breakWord => TextWrapping.anywhere,
+            _ when inherited.overflowWrap == CssOverflowWrap.anywhere =>
+              TextWrapping.anywhere,
+            _ => null,
+          };
+    InlineResult run(
+      String value,
+      TextStyle style, [
+      GestureRecognizer? recognizer,
+    ]) => InlineResult(
+      wrapping == null
+          ? TextSpan(text: value, style: style, recognizer: recognizer)
+          : WrappingTextSpan(
+              wrapping: wrapping,
+              text: value,
+              style: style,
+              recognizer: recognizer,
+            ),
+    );
+
     if (!linkify) {
-      return [InlineResult(TextSpan(text: text, style: style))];
+      return [run(text, style)];
     }
     final matches = _linkPattern.allMatches(text).where((m) {
       if (m.group(1) != null) {
@@ -319,7 +344,7 @@ class HtmlTreeBuilder {
       return _isKnownDomain(_stripTrailingPunctuation(m.group(0)!));
     }).toList();
     if (matches.isEmpty) {
-      return [InlineResult(TextSpan(text: text, style: style))];
+      return [run(text, style)];
     }
 
     final results = <HtmlBuildResult>[];
@@ -328,11 +353,7 @@ class HtmlTreeBuilder {
     var last = 0;
     for (final m in matches) {
       if (m.start > last) {
-        results.add(
-          InlineResult(
-            TextSpan(text: text.substring(last, m.start), style: style),
-          ),
-        );
+        results.add(run(text.substring(last, m.start), style));
       }
       final raw = m.group(0)!;
       final token = _stripTrailingPunctuation(raw);
@@ -344,20 +365,14 @@ class HtmlTreeBuilder {
         recognizer = TapGestureRecognizer()..onTap = () => onTap(url, const {});
         recognizers.add(recognizer);
       }
-      results.add(
-        InlineResult(
-          TextSpan(text: token, style: linkStyle, recognizer: recognizer),
-        ),
-      );
+      results.add(run(token, linkStyle, recognizer));
       if (trailing.isNotEmpty) {
-        results.add(InlineResult(TextSpan(text: trailing, style: style)));
+        results.add(run(trailing, style));
       }
       last = m.end;
     }
     if (last < text.length) {
-      results.add(
-        InlineResult(TextSpan(text: text.substring(last), style: style)),
-      );
+      results.add(run(text.substring(last), style));
     }
     return results;
   }
@@ -1238,8 +1253,12 @@ class HtmlTreeBuilder {
             start: false,
           );
         }
-        final paragraph = Text.rich(
-          TextSpan(children: spans),
+        final source = TextSpan(children: spans);
+        final wrapping = containerStyle.preventsWrapping || config.fitToWidth
+            ? null
+            : ParagraphWrap(source);
+        Widget paragraph = Text.rich(
+          wrapping?.text ?? source,
           textWidthBasis: textWidthBasis,
           textAlign: containerStyle.effectiveTextAlign ?? TextAlign.start,
           textDirection: containerStyle.textDirection,
@@ -1276,25 +1295,23 @@ class HtmlTreeBuilder {
             plain.trim().isEmpty &&
             (containerStyle.lineHeightPx == 0 ||
                 containerStyle.lineHeight == 0);
-        // `word-break: break-all | break-word` / `overflow-wrap: anywhere`:
-        // a word may break anywhere, so it adds no min-content and a table
-        // cell or shrink-to-fit box does not grow to fit a long URL.
-        // (fitToWidth measures the natural width on purpose, and `nowrap`
-        // text cannot break at all, so neither is capped.)
-        final capped =
-            containerStyle.breakAnywhere == true &&
-                !config.fitToWidth &&
-                !containerStyle.preventsWrapping
-            ? MinContentCap(
-                cap: containerStyle.resolvedFontSize,
-                child: paragraph,
-              )
-            : paragraph;
+        if (wrapping?.hasVisualBreaks == true) {
+          paragraph = SoftBreakSelection(child: paragraph);
+        }
+        final minContentBreaks = wrapping?.minContentBreaks ?? const <int>[];
+        if (containerStyle.preventsWrapping || minContentBreaks.isNotEmpty) {
+          paragraph = ParagraphMinWidth(
+            breaks: minContentBreaks,
+            child: paragraph,
+          );
+        }
         // Preserve the intrinsic width of a nonbreaking-space sizing hack,
         // while respecting its zero CSS line box. No visible glyph is clipped.
         target.add(
           withFloats(
-            zeroWhitespaceLine ? SizedBox(height: 0, child: capped) : capped,
+            zeroWhitespaceLine
+                ? SizedBox(height: 0, child: paragraph)
+                : paragraph,
           ),
         );
       } else if (floats.isNotEmpty) {
@@ -1664,18 +1681,7 @@ class HtmlTreeBuilder {
         }
       }
       final children = span.children?.map(visit).toList();
-      return TextSpan(
-        text: text,
-        children: children,
-        style: span.style,
-        recognizer: span.recognizer,
-        mouseCursor: span.mouseCursor,
-        semanticsLabel: span.semanticsLabel,
-        spellOut: span.spellOut,
-        locale: span.locale,
-        onEnter: span.onEnter,
-        onExit: span.onExit,
-      );
+      return copyTextSpan(span, text: text, children: children);
     }
 
     for (var i = 0; i < spans.length; i++) {
@@ -1703,27 +1709,14 @@ class HtmlTreeBuilder {
         '',
       );
       if (trimmed == text) return span;
-      return TextSpan(
-        text: trimmed,
-        style: span.style,
-        recognizer: span.recognizer,
-        mouseCursor: span.mouseCursor,
-        semanticsLabel: span.semanticsLabel,
-        children: span.children,
-      );
+      return copyTextSpan(span, text: trimmed);
     }
     final children = span.children;
     if (children == null || children.isEmpty) return span;
     final newChildren = List<InlineSpan>.of(children);
     final i = start ? 0 : newChildren.length - 1;
     newChildren[i] = _trimSpanWhitespace(newChildren[i], start: start);
-    return TextSpan(
-      style: span.style,
-      recognizer: span.recognizer,
-      mouseCursor: span.mouseCursor,
-      semanticsLabel: span.semanticsLabel,
-      children: newChildren,
-    );
+    return copyTextSpan(span, children: newChildren);
   }
 
   /// Wraps [content] with margin/padding/background/border/width from [style].

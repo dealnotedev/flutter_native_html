@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { diffArrays } from 'diff';
-import { harnessDir, loadCorpus, repoDir, runDir, writeJson } from './common.mjs';
+import { currentCaptureSettings, harnessDir, loadCorpus, matchesCaptureSettings, readJson, repoDir, runDir, writeJson } from './common.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -252,6 +252,8 @@ function compareJob(key, chrome, flutter) {
 // ---------- run over all jobs ----------
 const chromeDir = path.join(dir, 'chrome');
 const flutterDir = path.join(dir, 'flutter');
+const chromeSettings = currentCaptureSettings(chromeDir);
+const flutterSettings = currentCaptureSettings(flutterDir);
 const results = [];
 const blocksByJob = new Map();
 let skipped = 0;
@@ -262,13 +264,14 @@ for (const file of fs.readdirSync(chromeDir)) {
   if (!file.endsWith('.json') || file.startsWith('_')) continue;
   const key = file.slice(0, -5);
   if (exclude.test(key)) continue;
-  const fFile = path.join(flutterDir, file);
-  if (!fs.existsSync(fFile)) {
+  const chrome = readJson(path.join(chromeDir, file), null);
+  const flutter = readJson(path.join(flutterDir, file), null);
+  if (!chrome || !flutter ||
+      !matchesCaptureSettings(chrome, chromeSettings) ||
+      !matchesCaptureSettings(flutter, flutterSettings)) {
     skipped++;
     continue;
   }
-  const chrome = JSON.parse(fs.readFileSync(path.join(chromeDir, file), 'utf8'));
-  const flutter = JSON.parse(fs.readFileSync(fFile, 'utf8'));
   if (!flutter.words) {
     results.push({ key, id: chrome.id, width: chrome.width, score: 9, crashed: true, errors: flutter.errors, words: chrome.words.length, issueWords: {}, blockIssues: [], imageIssues: [] });
     continue;

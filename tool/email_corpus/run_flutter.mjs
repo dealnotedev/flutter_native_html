@@ -1,13 +1,19 @@
 // Renders the corpus with flutter_native_html via generated `flutter test` shards.
-// Usage: node run_flutter.mjs <manifest.jsonl|dir> --run <name> [--shards 8] [--force] [--filter re]
+// Usage: node run_flutter.mjs <manifest.jsonl|dir> --run <name>
+//   [--color-mode original|auto|dark] [--brightness light|dark] [--text-scale N]
+//   [--no-png] [--shards 8] [--force] [--filter re]
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import {
   assetsDir,
+  captureKey,
+  captureSettings,
+  clearCapture,
   flutterConfig,
   fontsManifest,
   harnessDir,
+  hasCachedCapture,
   imageUrls,
   jobKey,
   loadCorpus,
@@ -27,12 +33,24 @@ const run = option('--run', 'pilot');
 const shards = Number(option('--shards', '8'));
 const force = args.includes('--force');
 const filter = option('--filter') ? new RegExp(option('--filter')) : null;
+const config = {
+  ...flutterConfig,
+  colorMode: option('--color-mode', 'original'),
+  brightness: option('--brightness', 'light'),
+  textScale: Number(option('--text-scale', '1')),
+};
+const png = !args.includes('--no-png');
+if (!['original', 'auto', 'dark'].includes(config.colorMode)) {
+  throw new Error('--color-mode must be original, auto, or dark');
+}
+if (!['light', 'dark'].includes(config.brightness)) {
+  throw new Error('--brightness must be light or dark');
+}
+if (!Number.isFinite(config.textScale) || config.textScale <= 0) {
+  throw new Error('--text-scale must be a positive number');
+}
 const outDir = path.join(runDir(run), 'flutter');
-const specDir = path.join(outDir, '_jobs');
-const genDir = path.join(harnessDir, '_gen');
-fs.mkdirSync(specDir, { recursive: true });
-fs.rmSync(genDir, { recursive: true, force: true });
-fs.mkdirSync(genDir, { recursive: true });
+const settingsKey = captureSettings(outDir, { config, png });
 
 const fonts = readJson(fontsManifest);
 const assetIndex = readJson(path.join(assetsDir, 'index.json'), {});
@@ -147,13 +165,15 @@ const emails = [];
 for (const email of corpus) {
   if (!fs.existsSync(email.file)) continue;
   const html = fs.readFileSync(email.file, 'utf8');
+  const cacheKey = captureKey(settingsKey, html);
   const images = imageUrls(html).filter((url) => assetIndex[url]?.file);
   const lists = familyLists(html);
   const jobs = [];
   for (const width of widths) {
     const key = jobKey(email.id, width);
-    if (!force && fs.existsSync(path.join(outDir, key + '.json'))) continue;
-    jobs.push({ id: email.id, file: email.file.replace(/\\/g, '/'), width, key, images });
+    const base = path.join(outDir, key);
+    if (!force && hasCachedCapture(base, cacheKey)) continue;
+    jobs.push({ id: email.id, file: email.file.replace(/\\/g, '/'), width, key, images, cacheKey, settingsKey });
   }
   if (jobs.length) emails.push({ jobs, aliases: aliasMap(lists), names: [...new Set(lists.flat())] });
 }
@@ -188,29 +208,27 @@ const jobCount = emails.reduce((n, e) => n + e.jobs.length, 0);
 console.log(`${jobCount} flutter jobs in ${buckets.length} shards (${conflicts} emails with alias conflicts)`);
 if (!jobCount) process.exit(0);
 
+const genRoot = path.join(harnessDir, '_gen');
+fs.mkdirSync(genRoot, { recursive: true });
+const genDir = fs.mkdtempSync(path.join(genRoot, 'shards-'));
+process.on('exit', () => fs.rmSync(genDir, { recursive: true, force: true }));
+
 const testFiles = [];
 buckets.forEach((bucket, shard) => {
   const name = `shard_${String(shard).padStart(2, '0')}`;
   const spec = {
     outDir: outDir.replace(/\\/g, '/'),
     assetsDir: assetsDir.replace(/\\/g, '/'),
-    // `--color-mode auto|dark|original` and `--brightness dark` render the
-    // dark presentation for the dark-mode comparison (dark_compare.mjs).
-    config: {
-      ...flutterConfig,
-      colorMode: option('--color-mode', 'original'),
-      brightness: option('--brightness', 'light'),
-      textScale: Number(option('--text-scale', '1')),
-    },
-    // --no-png: layout dumps only (the report then shows no Flutter screenshot).
-    png: !args.includes('--no-png'),
+    config,
+    png,
     fonts: [...registrations(bucket.aliases, bucket.names)].map(([family, files]) => ({ name: family, files })),
     jobs: bucket.emails.flatMap((email) => email.jobs),
   };
-  const specFile = path.join(specDir, `${name}.json`).replace(/\\/g, '/');
+  for (const job of spec.jobs) clearCapture(path.join(outDir, job.key));
+  const specFile = path.join(genDir, `${name}.json`).replace(/\\/g, '/');
   fs.writeFileSync(specFile, JSON.stringify(spec));
   const testFile = path.join(genDir, `${name}_test.dart`);
-  fs.writeFileSync(testFile, `import '../flutter_capture.dart';\n\nvoid main() => runShard(${JSON.stringify(specFile)});\n`);
+  fs.writeFileSync(testFile, `import '../../flutter_capture.dart';\n\nvoid main() => runShard(${JSON.stringify(specFile)});\n`);
   testFiles.push(path.relative(repoDir, testFile).replace(/\\/g, '/'));
 });
 

@@ -13,8 +13,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_native_html/flutter_native_html.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-var _writePng = true;
-
 void runShard(String specPath) {
   final spec = jsonDecode(File(specPath).readAsStringSync()) as Map<String, dynamic>;
   final outDir = spec['outDir'] as String;
@@ -24,7 +22,7 @@ void runShard(String specPath) {
           .cast<String, dynamic>();
   final jobs = (spec['jobs'] as List).cast<Map<String, dynamic>>();
   final cfg = (spec['config'] as Map).cast<String, dynamic>();
-  _writePng = spec['png'] as bool? ?? true;
+  final writePng = spec['png'] as bool? ?? true;
 
   setUpAll(() async {
     for (final font in (spec['fonts'] as List).cast<Map<String, dynamic>>()) {
@@ -41,7 +39,15 @@ void runShard(String specPath) {
   for (final job in jobs) {
     testWidgets(
       job['key'] as String,
-      (tester) => _captureJob(tester, job, cfg, outDir, assetsDir, assetIndex),
+      (tester) => _captureJob(
+        tester,
+        job,
+        cfg,
+        outDir,
+        assetsDir,
+        assetIndex,
+        writePng: writePng,
+      ),
       timeout: const Timeout(Duration(seconds: 120)),
       variant: TargetPlatformVariant.only(TargetPlatform.windows),
     );
@@ -129,8 +135,9 @@ Future<void> _captureJob(
   Map<String, dynamic> cfg,
   String outDir,
   String assetsDir,
-  Map<String, dynamic> assetIndex,
-) async {
+  Map<String, dynamic> assetIndex, {
+  required bool writePng,
+}) async {
   final width = (job['width'] as num).toDouble();
   final key = job['key'] as String;
   final html = File(job['file'] as String).readAsStringSync();
@@ -147,12 +154,20 @@ Future<void> _captureJob(
   tester.view.physicalSize = Size(width, 1200);
   tester.view.devicePixelRatio = 1;
   final result = <String, dynamic>{'id': job['id'], 'width': width};
+  final capture = <String, dynamic>{
+    'key': job['cacheKey'],
+    'settingsKey': job['settingsKey'],
+    'complete': false,
+    'png': false,
+  };
+  result['capture'] = capture;
   final handles = <ImageStreamCompleterHandle>[];
+  var decoded = <String, ui.Image>{};
   try {
     PaintingBinding.instance.imageCache
       ..maximumSize = 100000
       ..maximumSizeBytes = 4 << 30;
-    var decoded =
+    decoded =
         await tester.runAsync(() => _decode(images.providers, handles)) ?? {};
     final boundary = GlobalKey();
     final config = HtmlRenderConfig(
@@ -162,7 +177,9 @@ Future<void> _captureJob(
       colorMode: HtmlEmailColorMode.values.byName(
         cfg['colorMode'] as String? ?? 'original',
       ),
-      brightness: cfg['brightness'] == 'dark' ? Brightness.dark : null,
+      brightness: cfg['brightness'] == 'dark'
+          ? Brightness.dark
+          : Brightness.light,
       enableTextSelection: false,
       fitToWidth: false,
       baseFontSize: (cfg['baseFontSize'] as num).toDouble(),
@@ -227,23 +244,30 @@ Future<void> _captureJob(
     result.addAll(_Dumper(root, images, decoded).dump());
     result['missingImages'] = images.missing.toList();
     final size = root.size;
-    if (_writePng && size.height <= 16000 && size.height > 0) {
-      await tester.runAsync(() async {
+    if (writePng && size.height <= 16000 && size.height > 0) {
+      final saved = await tester.runAsync(() async {
         final image = await root.toImage();
-        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        File('$outDir/$key.png').writeAsBytesSync(bytes!.buffer.asUint8List());
-        image.dispose();
+        try {
+          final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+          File('$outDir/$key.png').writeAsBytesSync(bytes!.buffer.asUint8List());
+          return true;
+        } finally {
+          image.dispose();
+        }
       });
+      if (saved != true) throw StateError('PNG capture did not complete');
+      capture['png'] = true;
     }
+    capture['complete'] = true;
+  } catch (error, stack) {
+    errors.add('harness: $error ${stack.toString().split('\n').take(3).join(' | ')}');
+  } finally {
     for (final image in decoded.values) {
       image.dispose();
     }
     for (final handle in handles) {
       handle.dispose();
     }
-  } catch (error, stack) {
-    errors.add('harness: $error ${stack.toString().split('\n').take(3).join(' | ')}');
-  } finally {
     FlutterError.onError = previousOnError;
     result['errors'] = errors;
     var nonFinite = 0;
@@ -423,6 +447,8 @@ class _Dumper {
 
     for (final match in RegExp(r'[^\s￼]+').allMatches(plain)) {
       flushPlaceholdersBefore(match.start);
+      final word = match.group(0)!.replaceAll('\u200b', '');
+      if (word.isEmpty) continue;
       final boxes = p.getBoxesForSelection(
         TextSelection(baseOffset: match.start, extentOffset: match.end),
       );
@@ -440,7 +466,7 @@ class _Dumper {
       if (fontSize < 2 || (color != null && color.a == 0)) continue;
       if (!_visible(rect, clip, opacity)) continue;
       words.add({
-        't': match.group(0),
+        't': word,
         'x': rect.left,
         'y': rect.top,
         'w': rect.width,

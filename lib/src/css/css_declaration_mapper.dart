@@ -73,7 +73,8 @@ class CssDeclarationMapper {
     String? verticalAlign;
     TextDirection? textDirection;
     CssWhiteSpace? whiteSpace;
-    bool? breakAnywhere;
+    CssWordBreak? wordBreak;
+    CssOverflowWrap? overflowWrap;
     bool? visibilityHidden;
     bool? pointerEventsNone;
     String? listStyleType;
@@ -314,18 +315,21 @@ class CssDeclarationMapper {
           whiteSpace = _whiteSpace(value) ?? whiteSpace;
           break;
         case 'word-break':
-          switch (value.trim().toLowerCase()) {
-            case 'break-all' || 'break-word':
-              breakAnywhere = true;
-            case 'normal' || 'keep-all':
-              breakAnywhere = false;
-          }
+          wordBreak = switch (value.trim().toLowerCase()) {
+            'break-all' => CssWordBreak.breakAll,
+            'break-word' => CssWordBreak.breakWord,
+            'keep-all' => CssWordBreak.keepAll,
+            'normal' || 'initial' => CssWordBreak.normal,
+            _ => null,
+          };
           break;
         case 'overflow-wrap':
-        case 'word-wrap':
-          // Only `anywhere` changes min-content; `break-word` breaks a word
-          // at layout without letting a table column shrink below it.
-          if (value.trim().toLowerCase() == 'anywhere') breakAnywhere = true;
+          overflowWrap = switch (value.trim().toLowerCase()) {
+            'anywhere' => CssOverflowWrap.anywhere,
+            'break-word' => CssOverflowWrap.breakWord,
+            'normal' || 'initial' => CssOverflowWrap.normal,
+            _ => null,
+          };
           break;
         case 'pointer-events':
           final v = value.trim().toLowerCase();
@@ -646,7 +650,8 @@ class CssDeclarationMapper {
       verticalAlign: verticalAlign,
       textDirection: textDirection,
       whiteSpace: whiteSpace,
-      breakAnywhere: breakAnywhere,
+      wordBreak: wordBreak,
+      overflowWrap: overflowWrap,
       visibilityHidden: visibilityHidden,
       pointerEventsNone: pointerEventsNone,
       listStyleType: listStyleType,

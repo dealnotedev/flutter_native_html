@@ -69,6 +69,34 @@ class RenderFitToWidth extends RenderProxyBox {
     return intrinsic > _declaredWidthHint ? intrinsic : _declaredWidthHint;
   }
 
+  ({double width, double scale}) _fit(RenderBox child, double available) {
+    if (!available.isFinite) return (width: available, scale: 1);
+    final required = _requiredWidth(child);
+    if (required <= available + 0.5) return (width: available, scale: 1);
+    final scale = available / required;
+    return scale < _minScale
+        ? (width: available / _minScale, scale: _minScale)
+        : (width: required, scale: scale);
+  }
+
+  double _intrinsicHeight(double width, {required bool minimum}) {
+    final child = this.child;
+    if (child == null) return 0;
+    final fit = _fit(child, width);
+    final height = minimum
+        ? child.getMinIntrinsicHeight(fit.width)
+        : child.getMaxIntrinsicHeight(fit.width);
+    return height * fit.scale;
+  }
+
+  @override
+  double computeMinIntrinsicHeight(double width) =>
+      _intrinsicHeight(width, minimum: true);
+
+  @override
+  double computeMaxIntrinsicHeight(double width) =>
+      _intrinsicHeight(width, minimum: false);
+
   @override
   void performLayout() {
     final child = this.child;
@@ -77,40 +105,29 @@ class RenderFitToWidth extends RenderProxyBox {
       _scale = 1.0;
       return;
     }
-    final available = constraints.maxWidth;
-    final required = _requiredWidth(child);
-    if (!available.isFinite || required <= available + 0.5) {
-      // Fits already (or unbounded) — render normally.
-      _scale = 1.0;
+    final fit = _fit(child, constraints.maxWidth);
+    _scale = fit.scale;
+    if (_scale == 1) {
       child.layout(constraints, parentUsesSize: true);
       size = child.size;
       return;
     }
-    final naturalScale = available / required;
-    _scale = naturalScale.clamp(_minScale, 1.0);
-    final layoutWidth = naturalScale < _minScale
-        ? available / _minScale
-        : required;
-    child.layout(BoxConstraints(maxWidth: layoutWidth), parentUsesSize: true);
-    size = constraints.constrain(Size(available, child.size.height * _scale));
+    child.layout(BoxConstraints(maxWidth: fit.width), parentUsesSize: true);
+    size = constraints.constrain(
+      Size(constraints.maxWidth, child.size.height * _scale),
+    );
   }
 
   @override
   Size computeDryLayout(BoxConstraints constraints) {
     final child = this.child;
     if (child == null) return constraints.smallest;
-    final available = constraints.maxWidth;
-    final required = _requiredWidth(child);
-    if (!available.isFinite || required <= available + 0.5) {
-      return child.getDryLayout(constraints);
-    }
-    final naturalScale = available / required;
-    final scale = naturalScale.clamp(_minScale, 1.0);
-    final layoutWidth = naturalScale < _minScale
-        ? available / _minScale
-        : required;
-    final childSize = child.getDryLayout(BoxConstraints(maxWidth: layoutWidth));
-    return constraints.constrain(Size(available, childSize.height * scale));
+    final fit = _fit(child, constraints.maxWidth);
+    if (fit.scale == 1) return child.getDryLayout(constraints);
+    final childSize = child.getDryLayout(BoxConstraints(maxWidth: fit.width));
+    return constraints.constrain(
+      Size(constraints.maxWidth, childSize.height * fit.scale),
+    );
   }
 
   Matrix4 get _transform => Matrix4.diagonal3Values(_scale, _scale, 1.0);

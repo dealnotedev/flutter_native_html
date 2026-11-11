@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { diffArrays } from 'diff';
 import { PNG } from 'pngjs';
-import { loadCorpus, runDir } from './common.mjs';
+import { currentCaptureSettings, loadCorpus, matchesCaptureSettings, readJson, runDir } from './common.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -19,6 +19,10 @@ const option = (name, fallback) => {
 };
 const dir = runDir(option('--run', 'dk_css'));
 const corpus = new Map(loadCorpus(option('--corpus')).map((e) => [e.id, e]));
+const chromeDir = path.join(dir, 'chrome');
+const flutterDir = path.join(dir, 'flutter');
+const chromeSettings = currentCaptureSettings(chromeDir);
+const flutterSettings = currentCaptureSettings(flutterDir);
 
 const lin = (v) => {
   const c = v / 255;
@@ -34,6 +38,7 @@ const norm = (t) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 
 /** Text and background colour of [word] in [png] (null when off-image). */
 function sample(png, word) {
+  if (word.lines > 1 || ![word.x, word.y, word.w, word.h].every(Number.isFinite)) return null;
   const x0 = Math.floor(word.x);
   const y0 = Math.floor(word.y);
   const x1 = Math.ceil(word.x + word.w);
@@ -59,20 +64,30 @@ function sample(png, word) {
 }
 
 function sides(key) {
-  const read = (side) => {
-    const json = path.join(dir, side, key + '.json');
-    const png = path.join(dir, side, key + '.png');
-    if (!fs.existsSync(json) || !fs.existsSync(png)) return null;
-    return { dump: JSON.parse(fs.readFileSync(json, 'utf8')), png: PNG.sync.read(fs.readFileSync(png)) };
+  const read = (sideDir, settings) => {
+    const base = path.join(sideDir, key);
+    const dump = readJson(base + '.json', null);
+    if (!Array.isArray(dump?.words) || !matchesCaptureSettings(dump, settings) ||
+        dump.capture?.complete === false || dump.capture?.png === false) return null;
+    try {
+      return { dump, png: PNG.sync.read(fs.readFileSync(base + '.png')) };
+    } catch (error) {
+      if (error.code !== 'ENOENT') console.warn('Unreadable capture:', base, error.message);
+      return null;
+    }
   };
-  return { chrome: read('chrome'), flutter: read('flutter') };
+  return { chrome: read(chromeDir, chromeSettings), flutter: read(flutterDir, flutterSettings) };
 }
 
 if (option('--sbs')) {
   const key = option('--sbs');
   const { chrome, flutter } = sides(key);
+  if (!chrome || !flutter) throw new Error('No matching PNG capture pair for ' + key);
   const y0 = Number(option('--y0', '0'));
   const y1 = Math.min(Number(option('--y1', '1600')), chrome.png.height, flutter.png.height);
+  if (!Number.isInteger(y0) || !Number.isInteger(y1) || y0 < 0 || y1 <= y0) {
+    throw new Error('--y0 and --y1 must describe a nonempty screenshot range');
+  }
   const gap = 12;
   const out = new PNG({ width: chrome.png.width + gap + flutter.png.width, height: y1 - y0 });
   out.data.fill(128);
@@ -86,11 +101,15 @@ if (option('--sbs')) {
 }
 
 const results = [];
-for (const file of fs.readdirSync(path.join(dir, 'flutter'))) {
-  if (!file.endsWith('.json')) continue;
+let skipped = 0;
+for (const file of fs.readdirSync(flutterDir)) {
+  if (!file.endsWith('.json') || file.startsWith('_')) continue;
   const key = file.slice(0, -5);
   const { chrome, flutter } = sides(key);
-  if (!chrome || !flutter) continue;
+  if (!chrome || !flutter) {
+    skipped++;
+    continue;
+  }
   const measure = (side) =>
     side.dump.words
       .map((w) => ({ n: norm(w.t), s: sample(side.png, w) }))
@@ -106,8 +125,8 @@ for (const file of fs.readdirSync(path.join(dir, 'flutter'))) {
     else if (part.removed) ci += part.count;
     else for (let k = 0; k < part.count; k++) pairs.push([c[ci++], f[fi++]]);
   }
-  const share = (list, pred) => (list.length ? list.filter(pred).length / list.length : 0);
-  const mean = (list, fn) => (list.length ? list.reduce((s, x) => s + fn(x), 0) / list.length : 0);
+  const share = (list, pred) => (list.length ? list.filter(pred).length / list.length : null);
+  const mean = (list, fn) => (list.length ? list.reduce((s, x) => s + fn(x), 0) / list.length : null);
   const id = chrome.dump.id;
   results.push({
     key,
@@ -131,26 +150,30 @@ for (const file of fs.readdirSync(path.join(dir, 'flutter'))) {
   });
 }
 fs.writeFileSync(path.join(dir, 'dark_results.json'), JSON.stringify(results, null, 1));
+if (skipped) console.warn('Jobs without a matching capture pair:', skipped);
 
 const groups = {};
 for (const r of results) {
-  const g = `${r.darkSupport ? 'dark-support' : 'no-support'} / flutter ${r.flutterDark > 0.5 ? 'dark' : 'light'}`;
+  const appearance = r.flutterDark == null ? 'unsampled' : r.flutterDark > 0.5 ? 'dark' : 'light';
+  const g = `${r.darkSupport ? 'dark-support' : 'no-support'} / flutter ${appearance}`;
   (groups[g] ??= []).push(r);
 }
-const pct = (v) => `${Math.round(v * 100)}%`;
+const pct = (v) => v == null ? '—' : `${Math.round(v * 100)}%`;
 const med = (list, fn) => {
-  const v = list.map(fn).sort((a, b) => a - b);
-  return v[v.length >> 1];
+  const v = list.map(fn).filter((value) => value != null).sort((a, b) => a - b);
+  return v.length ? v[v.length >> 1] : null;
 };
+const delta = (value) => value == null ? '—' : Math.round(value);
 const rows = {};
 for (const [g, list] of Object.entries(groups)) {
   rows[g] = {
     emails: list.length,
+    'with matched words': list.filter((r) => r.words > 0).length,
     'chrome dark bg': pct(med(list, (r) => r.chromeDark)),
     'polarity agree': pct(med(list, (r) => r.polarityAgree)),
-    'agree <80%': list.filter((r) => r.polarityAgree < 0.8).length,
-    'bg Δ': Math.round(med(list, (r) => r.bgDelta)),
-    'fg Δ': Math.round(med(list, (r) => r.fgDelta)),
+    'agree <80%': list.filter((r) => r.polarityAgree != null && r.polarityAgree < 0.8).length,
+    'bg Δ': delta(med(list, (r) => r.bgDelta)),
+    'fg Δ': delta(med(list, (r) => r.fgDelta)),
     'flutter unreadable >5%': list.filter((r) => r.flutterLow > 0.05).length,
     'chrome unreadable >5%': list.filter((r) => r.chromeLow > 0.05).length,
   };

@@ -25,6 +25,10 @@ enum CssTextTransform { none, uppercase, lowercase, capitalize }
 
 enum CssWhiteSpace { normal, nowrap, pre, preWrap, preLine }
 
+enum CssWordBreak { normal, breakAll, breakWord, keepAll }
+
+enum CssOverflowWrap { normal, anywhere, breakWord }
+
 enum CssBoxSizing { contentBox, borderBox }
 
 enum CssBackgroundRepeat { repeat, repeatX, repeatY, noRepeat }
@@ -173,7 +177,8 @@ class HtmlStyle {
     this.cellTextAlign,
     this.textTransform,
     this.whiteSpace,
-    this.breakAnywhere,
+    this.wordBreak,
+    this.overflowWrap,
     this.visibilityHidden,
     this.pointerEventsNone,
     this.textDirection,
@@ -229,11 +234,8 @@ class HtmlStyle {
   final CssTextTransform? textTransform;
   final CssWhiteSpace? whiteSpace;
 
-  /// `word-break: break-all | break-word` or `overflow-wrap: anywhere`: a
-  /// word may break at any point, so it adds nothing to the min-content
-  /// width (a table cell no longer grows to fit a long URL). Inherited.
-  /// (`overflow-wrap: break-word` breaks only at layout, as in browsers.)
-  final bool? breakAnywhere;
+  final CssWordBreak? wordBreak;
+  final CssOverflowWrap? overflowWrap;
   final bool? visibilityHidden;
   // pointer-events: none. A sender sets this to suppress link auto-detection;
   // we treat it as a signal to expose the bare email/URL as a real link.
@@ -333,7 +335,8 @@ class HtmlStyle {
     legacyTextAlign: legacyTextAlign,
     textTransform: textTransform,
     whiteSpace: whiteSpace,
-    breakAnywhere: breakAnywhere,
+    wordBreak: wordBreak,
+    overflowWrap: overflowWrap,
     visibilityHidden: visibilityHidden,
     pointerEventsNone: pointerEventsNone,
     textDirection: textDirection,
@@ -396,7 +399,8 @@ class HtmlStyle {
       cellTextAlign: other.cellTextAlign ?? cellTextAlign,
       textTransform: other.textTransform ?? textTransform,
       whiteSpace: other.whiteSpace ?? whiteSpace,
-      breakAnywhere: other.breakAnywhere ?? breakAnywhere,
+      wordBreak: other.wordBreak ?? wordBreak,
+      overflowWrap: other.overflowWrap ?? overflowWrap,
       visibilityHidden: other.visibilityHidden ?? visibilityHidden,
       pointerEventsNone: other.pointerEventsNone ?? pointerEventsNone,
       textDirection: other.textDirection ?? textDirection,

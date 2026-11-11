@@ -5,7 +5,7 @@ import 'package:flutter/widgets.dart';
 
 /// A table row of px-wide cells, laid out like a browser's auto table on a
 /// narrow screen: each cell keeps its width while the row fits, and the
-/// [shrinkable] cells narrow in proportion to their widths when it does not
+/// [shrinkable] cells narrow toward their min-content widths when it does not
 /// (fixed gutters/spacing keep theirs). Every cell then stretches to the
 /// tallest cell's height, measured by a real layout rather than intrinsics.
 class ProportionalRow extends MultiChildRenderObjectWidget {
@@ -62,26 +62,46 @@ class RenderProportionalRow extends RenderBox
     }
   }
 
-  double get _total => _widths.fold(0.0, (s, w) => s + w);
+  static double _sum(List<double> widths) =>
+      widths.fold(0.0, (sum, width) => sum + width);
+
+  List<double> _minimumWidths() {
+    final widths = <double>[];
+    var child = firstChild;
+    while (child != null) {
+      final i = widths.length;
+      var minimum = _widths[i];
+      if (_shrinkable[i]) {
+        try {
+          minimum = child.getMinIntrinsicWidth(double.infinity);
+        } on FlutterError {
+          // Custom widgets can require real layout to determine their size.
+          minimum = _widths[i];
+        }
+        if (!minimum.isFinite || minimum < 0) minimum = _widths[i];
+      }
+      widths.add(minimum);
+      child = childAfter(child);
+    }
+    return widths;
+  }
+
+  List<double> _preferredWidths(List<double> minimums) => [
+    for (var i = 0; i < _widths.length; i++) math.max(_widths[i], minimums[i]),
+  ];
 
   /// Each child's width for a row at most [maxWidth] wide.
   List<double> _resolve(double maxWidth) {
-    final total = _total;
-    if (!maxWidth.isFinite || total <= maxWidth) return _widths;
-    var fixed = 0.0;
-    var flexible = 0.0;
-    for (var i = 0; i < _widths.length; i++) {
-      if (_shrinkable[i]) {
-        flexible += _widths[i];
-      } else {
-        fixed += _widths[i];
-      }
-    }
-    if (flexible <= 0) return _widths;
-    final scale = math.max(0.0, maxWidth - fixed) / flexible;
+    final minimums = _minimumWidths();
+    final preferred = _preferredWidths(minimums);
+    final total = _sum(preferred);
+    if (total <= maxWidth) return preferred;
+    final minimumTotal = _sum(minimums);
+    if (minimumTotal >= maxWidth) return minimums;
+    final fraction = (maxWidth - minimumTotal) / (total - minimumTotal);
     return [
       for (var i = 0; i < _widths.length; i++)
-        _shrinkable[i] ? _widths[i] * scale : _widths[i],
+        minimums[i] + (preferred[i] - minimums[i]) * fraction,
     ];
   }
 
@@ -123,28 +143,17 @@ class RenderProportionalRow extends RenderBox
   @override
   Size computeDryLayout(covariant BoxConstraints constraints) {
     final widths = _resolve(constraints.maxWidth);
-    var height = 0.0;
-    var child = firstChild;
-    var i = 0;
-    while (child != null) {
-      height = math.max(height, child.getMaxIntrinsicHeight(widths[i]));
-      child = childAfter(child);
-      i++;
-    }
-    return constraints.constrain(
-      Size(widths.fold(0.0, (s, w) => s + w), height),
-    );
+    return constraints.constrain(Size(_sum(widths), _intrinsicHeight(widths)));
   }
 
-  // Like the scaled row this replaces, the row asks for its full width.
   @override
-  double computeMinIntrinsicWidth(double height) => _total;
+  double computeMinIntrinsicWidth(double height) => _sum(_minimumWidths());
 
   @override
-  double computeMaxIntrinsicWidth(double height) => _total;
+  double computeMaxIntrinsicWidth(double height) =>
+      _sum(_preferredWidths(_minimumWidths()));
 
-  double _intrinsicHeight(double width) {
-    final widths = _resolve(width);
+  double _intrinsicHeight(List<double> widths) {
     var height = 0.0;
     var child = firstChild;
     var i = 0;
@@ -157,10 +166,12 @@ class RenderProportionalRow extends RenderBox
   }
 
   @override
-  double computeMinIntrinsicHeight(double width) => _intrinsicHeight(width);
+  double computeMinIntrinsicHeight(double width) =>
+      _intrinsicHeight(_resolve(width));
 
   @override
-  double computeMaxIntrinsicHeight(double width) => _intrinsicHeight(width);
+  double computeMaxIntrinsicHeight(double width) =>
+      _intrinsicHeight(_resolve(width));
 
   @override
   double? computeDistanceToActualBaseline(TextBaseline baseline) =>

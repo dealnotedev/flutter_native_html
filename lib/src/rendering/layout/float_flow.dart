@@ -7,8 +7,9 @@ import 'package:flutter/widgets.dart';
 /// first child is the float, and each following block sits beside it while
 /// it starts above the float's bottom, then takes the full width below it.
 /// Browsers wrap per line; a block that starts beside the float stays narrow
-/// here to its end, unless it would mostly run on below the float or cannot
-/// fit its longest word beside it — then it starts under the float.
+/// here to its end. A block that would mostly run on below the float starts
+/// beneath it. Auto-sized floats also move a block below when the remaining
+/// column is narrow and measurably increases the block's height.
 class FloatFlow extends MultiChildRenderObjectWidget {
   const FloatFlow({
     super.key,
@@ -67,7 +68,9 @@ class RenderFloatFlow extends RenderBox
 
   double _floatSlot(double width) {
     final fixed = _floatWidth;
-    if (fixed != null) return width.isFinite ? math.min(fixed, width / 2) : fixed;
+    if (fixed != null) {
+      return width.isFinite ? math.min(fixed, width / 2) : fixed;
+    }
     final own = firstChild?.getMaxIntrinsicWidth(double.infinity) ?? 0;
     return width.isFinite ? math.min(own, width) : own;
   }
@@ -102,17 +105,17 @@ class RenderFloatFlow extends RenderBox
       return child.size.height;
     }
 
-    // A sliver beside a wide float (a 240px image in a 340px cell) breaks
-    // words inside ("De shna") for the whole block; a browser would move
-    // most of those lines below the float, so content starts there. (The
-    // longest word would be the exact test, but a paragraph's intrinsic
-    // width dry-lays out its inline boxes, which a Transform cannot do.)
-    final roomBeside = besideWidth >= math.max(120.0, width * 0.3);
+    // Leave fixed-width legacy table floats on their existing path. For an
+    // auto-sized float, check actual layout in a narrow slot so a short caption
+    // can still sit beside it. Measuring the inline widgets' intrinsics can
+    // require unsupported dry baselines.
+    final narrowSlot =
+        _floatWidth == null && besideWidth < math.max(120.0, width * 0.3);
     var y = 0.0;
     var child = childAfter(float);
     while (child != null) {
       var beside = y < floatSize.height;
-      if (beside && !roomBeside) {
+      if (beside && besideWidth == 0) {
         beside = false;
         y = floatSize.height;
       }
@@ -124,6 +127,15 @@ class RenderFloatFlow extends RenderBox
         beside = false;
         y = floatSize.height;
         height = heightFor(child, width);
+      } else if (beside && narrowSlot) {
+        final fullHeight = heightFor(child, width);
+        if (height > fullHeight + 0.5) {
+          beside = false;
+          y = floatSize.height;
+          height = fullHeight;
+        } else if (!measure) {
+          height = heightFor(child, besideWidth);
+        }
       }
       if (!measure) {
         (child.parentData! as _FloatFlowParentData).offset = Offset(

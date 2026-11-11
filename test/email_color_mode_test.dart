@@ -430,9 +430,7 @@ void main() {
       );
     });
 
-    testWidgets('forced dark adapts on top of the dark rules', (
-      tester,
-    ) async {
+    testWidgets('forced dark adapts on top of the dark rules', (tester) async {
       await tester.pumpWidget(
         _host(
           HtmlEmailParser().parse(html),
@@ -493,6 +491,38 @@ void main() {
       _contrast(onPanel.color!, panel.backgroundColor!),
       greaterThanOrEqualTo(4.5),
     );
+  });
+
+  test('a translucent group does not hide the bitmap behind its panel', () {
+    for (final panel in [
+      '<div style="opacity:.55;background:white;color:black">Text</div>',
+      '<section style="opacity:.55"><div style="background:white;color:black">'
+          'Text</div></section>',
+    ]) {
+      final document = HtmlEmailParser().parse(
+        '<div style="background:url(cid:pattern)">$panel</div>',
+      );
+      final resolver = StyleResolver(
+        stylesheet: document.stylesheet,
+        rootStyle: const HtmlStyle(color: Color(0xffeeeeee)),
+        brightness: Brightness.dark,
+        canvasColor: const Color(0xff181818),
+        colorTransform: const EmailColorTransform(),
+      );
+      final parent = document.root.children.single;
+      final bodyStyle = resolver.resolve(document.root, const HtmlStyle());
+      final backdrop = resolver.resolve(parent, bodyStyle.inheritedOnly());
+      final group = resolver.resolve(
+        parent.children.single,
+        backdrop.inheritedOnly(),
+      );
+      final inner = parent.children.single.children;
+      final surface = inner.isEmpty
+          ? group
+          : resolver.resolve(inner.single, group.inheritedOnly());
+      expect(surface.backgroundColor, const Color(0xffffffff));
+      expect(surface.color, const Color(0xff000000));
+    }
   });
 
   test(

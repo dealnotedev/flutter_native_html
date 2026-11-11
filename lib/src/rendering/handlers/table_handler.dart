@@ -4,6 +4,7 @@ import 'package:html/dom.dart' as dom;
 
 import '../../css/css_length.dart';
 import '../../css/html_style.dart';
+import '../../widget/fit_to_width.dart';
 import '../element_handler.dart';
 import '../html_build_result.dart';
 import '../html_render_context.dart';
@@ -1957,6 +1958,7 @@ class TableHandler extends HtmlElementHandler {
   ) {
     final rowCtx = context.builder.contextForDescendant(tr, context);
     final cells = <Widget>[];
+    final fixedGutters = <int>{};
     final percentageCells = <int, double>{};
     var cellEls = _cellsOf(tr, context);
     if (rtl) cellEls = cellEls.reversed.toList();
@@ -1966,6 +1968,7 @@ class TableHandler extends HtmlElementHandler {
     for (var i = 0; i < cellEls.length; i++) {
       final cellEl = cellEls[i];
       if (cellSpacing.h > 0 && cells.isNotEmpty) {
+        fixedGutters.add(cells.length);
         cells.add(SizedBox(width: cellSpacing.h));
       }
       final cellCtx = context.builder.contextForDescendant(cellEl, rowCtx);
@@ -2043,6 +2046,15 @@ class TableHandler extends HtmlElementHandler {
             : 0.0;
         if (percent > 0) percentageCells[cells.length] = percent;
       }
+      if (fixed &&
+          sized is SizedBox &&
+          !_CellContentFacts.inspect(
+            cellEl,
+            cellCtx,
+            includeCellWidth: false,
+          ).hasContent) {
+        fixedGutters.add(cells.length);
+      }
       cells.add(sized);
     }
     if (cells.isEmpty) return const SizedBox.shrink();
@@ -2095,13 +2107,19 @@ class TableHandler extends HtmlElementHandler {
       // instead shrank its text to 55%. Each sized cell shares the line by
       // its width (spacers stay fixed); a row that fits keeps its exact
       // widths. Cell heights come from a real layout, not intrinsics.
-      row = ProportionalRow(
-        widths: [for (final c in cells) (c as SizedBox).width!],
-        shrinkable: [
-          for (final c in cells)
-            (c as SizedBox).child != null && c.width! > 0,
-        ],
-        children: cells,
+      final boxes = cells.cast<SizedBox>();
+      row = FitToWidth(
+        declaredWidthHint: 0,
+        minScale: 0,
+        child: ProportionalRow(
+          widths: [for (final box in boxes) box.width!],
+          shrinkable: [
+            for (var i = 0; i < boxes.length; i++) !fixedGutters.contains(i),
+          ],
+          children: [
+            for (final box in boxes) box.child ?? const SizedBox.shrink(),
+          ],
+        ),
       );
     } else {
       // All cells are fixed-width and can't shrink, so widths summing slightly
@@ -3392,8 +3410,9 @@ class _CellContentFacts {
 
   factory _CellContentFacts.inspect(
     dom.Element cell,
-    HtmlRenderContext context,
-  ) {
+    HtmlRenderContext context, {
+    bool includeCellWidth = true,
+  }) {
     var hasContent = false;
     var onlyImages = true;
     var sawImage = false;
@@ -3423,7 +3442,8 @@ class _CellContentFacts {
       // A percentage-width structural wrapper contributes no intrinsic
       // content when all its descendants are hidden. Treating width:100% as
       // content makes an otherwise empty column claim a flex share.
-      if (width != null &&
+      if ((includeCellWidth || !identical(element, cell)) &&
+          width != null &&
           !width.isAuto &&
           width.unit != CssLengthUnit.percent &&
           width.value > 0) {
