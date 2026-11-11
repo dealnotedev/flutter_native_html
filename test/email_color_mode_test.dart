@@ -396,6 +396,105 @@ void main() {
     },
   );
 
+  group('dark media rules without color-scheme', () {
+    // Kit: `@media (prefers-color-scheme: dark) { body { color:#000
+    // !important } .light-enabled { display:none } }` and no color-scheme.
+    // Chrome keeps the light canvas (CSS Color Adjust), so the black text
+    // stays readable; a dark canvas made it invisible.
+    const html = '''
+      <style>
+      .dark-logo { display: none; }
+      @media (prefers-color-scheme: dark) {
+        body { color: #000000 !important; }
+        .light-logo { display: none !important; }
+        .dark-logo { display: block !important; }
+      }
+      </style>
+      <body style="color:#06292e"><p class="light-logo">Light logo</p>
+      <p class="dark-logo">Dark logo</p><p>Happy Friday, friend.</p></body>
+    ''';
+
+    testWidgets('auto keeps the light canvas and applies the dark rules', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(HtmlEmailParser().parse(html), brightness: Brightness.dark),
+      );
+      expect(find.textContaining('Dark logo'), findsOneWidget);
+      expect(find.textContaining('Light logo'), findsNothing);
+      final canvas = _canvas(tester);
+      expect(canvas.computeLuminance(), greaterThan(0.9));
+      expect(
+        _contrast(_textColor(tester, 'Happy Friday'), canvas),
+        greaterThanOrEqualTo(4.5),
+      );
+    });
+
+    testWidgets('forced dark adapts on top of the dark rules', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          HtmlEmailParser().parse(html),
+          brightness: Brightness.dark,
+          config: const HtmlRenderConfig(
+            enableTextSelection: false,
+            colorMode: HtmlEmailColorMode.dark,
+          ),
+        ),
+      );
+      expect(find.textContaining('Dark logo'), findsOneWidget);
+      final canvas = _canvas(tester);
+      expect(canvas.computeLuminance(), lessThan(0.05));
+      expect(
+        _contrast(_textColor(tester, 'Happy Friday'), canvas),
+        greaterThanOrEqualTo(4.5),
+      );
+    });
+  });
+
+  test('an opaque panel inside a bitmap backdrop adapts again', () {
+    // Constant Contact: the whole layout sits in a patterned
+    // `<td background>`; its white content panel covers the pattern, so it
+    // must darken like any surface while text on the bitmap keeps its color.
+    final document = HtmlEmailParser().parse('''
+      <body><div style="background:url(cid:pattern)">
+      <p class="on-image" style="color:#333333">On the pattern</p>
+      <div style="background-color:#ffffff;color:#000000">
+      <p class="on-panel">On the panel</p></div></div></body>
+    ''');
+    final resolver = StyleResolver(
+      stylesheet: document.stylesheet,
+      rootStyle: const HtmlStyle(color: Color(0xffeeeeee)),
+      brightness: Brightness.dark,
+      canvasColor: const Color(0xff181818),
+      colorTransform: const EmailColorTransform(),
+    );
+    final body = resolver.resolve(document.root, const HtmlStyle());
+    final backdrop = resolver.resolve(
+      document.root.querySelector('div')!,
+      body.inheritedOnly(),
+    );
+    final onImage = resolver.resolve(
+      document.root.querySelector('.on-image')!,
+      backdrop.inheritedOnly(),
+    );
+    final panel = resolver.resolve(
+      document.root.querySelectorAll('div')[1],
+      backdrop.inheritedOnly(),
+    );
+    final onPanel = resolver.resolve(
+      document.root.querySelector('.on-panel')!,
+      panel.inheritedOnly(),
+    );
+    expect(onImage.color, const Color(0xff333333));
+    expect(panel.backgroundColor!.computeLuminance(), lessThan(0.05));
+    expect(
+      _contrast(onPanel.color!, panel.backgroundColor!),
+      greaterThanOrEqualTo(4.5),
+    );
+  });
+
   test(
     'theme metadata works without media and CSS can override the head hint',
     () {

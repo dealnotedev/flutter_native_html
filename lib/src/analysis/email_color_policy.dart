@@ -14,14 +14,21 @@ class EmailColorPolicy {
     this.brightness, {
     this.adapt = false,
     this.canvas = const Color(0xffffffff),
-  });
+    Color? text,
+  }) : _text = text; // ignore: prefer_initializing_formals
 
+  /// The `prefers-color-scheme` the author's media queries see.
   final Brightness brightness;
   final bool adapt;
   final Color canvas;
-  Color get text => brightness == Brightness.dark
-      ? const Color(0xffeeeeee)
-      : const Color(0xff000000);
+  final Color? _text;
+
+  /// Default text color (CSS `CanvasText` of the canvas's scheme).
+  Color get text =>
+      _text ??
+      (brightness == Brightness.dark
+          ? const Color(0xffeeeeee)
+          : const Color(0xff000000));
 }
 
 EmailColorPolicy resolveEmailColorPolicy(
@@ -57,12 +64,27 @@ EmailColorPolicy resolveEmailColorPolicy(
       (resolver.colorSchemeFor(document.root) ?? document.colorScheme ?? '')
           .toLowerCase()
           .split(RegExp(r'\s+'));
+  // `color-scheme: dark` (or the meta) opts the canvas in: dark canvas and
+  // light default text, as a browser renders it.
   if (scheme.contains('dark')) return dark;
+  final force = config.colorMode == HtmlEmailColorMode.dark;
+  // Only `@media (prefers-color-scheme: dark)` rules: the author's dark
+  // rules apply, but the canvas keeps its light scheme (CSS Color Adjust;
+  // Chrome keeps it white). Such rules often only swap a logo or even set
+  // `color:#000`, which a dark canvas would make unreadable. A forced dark
+  // mode adapts the rest of the colors on top instead.
+  final mediaOnly = force
+      ? EmailColorPolicy(
+          Brightness.dark,
+          adapt: true,
+          canvas: config.darkBackgroundColor,
+        )
+      : const EmailColorPolicy(Brightness.dark, text: Color(0xff000000));
   var simple = config.handlers.isEmpty;
   var hasText = false;
   final html = document.root.parent;
   if (html != null && document.stylesheet.hasDarkStylesFor(html, width)) {
-    return dark;
+    return mediaOnly;
   }
   if (html != null && !_simpleStyle(resolver.resolve(html, base))) {
     simple = false;
@@ -73,7 +95,7 @@ EmailColorPolicy resolveEmailColorPolicy(
     final style = resolver.resolve(element, inherited.inheritedOnly());
     // Visibility itself may be the theme switch (light/dark logo variants).
     if (document.stylesheet.hasDarkStylesFor(element, width)) {
-      return dark;
+      return mediaOnly;
     }
     if (style.display == CssDisplay.none || style.visibilityHidden == true) {
       continue;
@@ -90,7 +112,6 @@ EmailColorPolicy resolveEmailColorPolicy(
       }
     }
   }
-  final force = config.colorMode == HtmlEmailColorMode.dark;
   final onlyLight = scheme.contains('only') && scheme.contains('light');
   if (force || (simple && hasText && !onlyLight)) {
     return EmailColorPolicy(

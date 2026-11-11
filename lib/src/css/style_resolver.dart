@@ -231,9 +231,14 @@ class StyleResolver {
         baseBorders: base.borders,
       ),
     );
+    // An opaque background of its own covers the bitmap behind it: a white
+    // content panel inside a patterned `<td background>` (Constant Contact)
+    // adapts like any other surface instead of staying light in dark mode.
+    final ownBackground = result.backgroundColor;
     final hasImage =
         result.backgroundImage != null ||
-        (_imageBackgrounds[element.parent] ?? false);
+        ((_imageBackgrounds[element.parent] ?? false) &&
+            (ownBackground == null || ownBackground.a < 0.99));
     _imageBackgrounds[element] = hasImage;
     if (colorTransform != null && hasImage) {
       // Bitmap contrast is unknown. Preserve source colors across its backdrop.
