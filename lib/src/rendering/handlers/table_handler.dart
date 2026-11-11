@@ -8,6 +8,7 @@ import '../element_handler.dart';
 import '../html_build_result.dart';
 import '../html_render_context.dart';
 import '../layout/percent_height.dart';
+import '../layout/proportional_row.dart';
 import 'handler_utils.dart';
 
 /// Renders tables.
@@ -2084,6 +2085,23 @@ class TableHandler extends HtmlElementHandler {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: cells,
         ),
+      );
+    } else if (cells.every(
+      (c) => c is SizedBox && c.width != null && c.width!.isFinite,
+    )) {
+      // All cells have px widths. Browsers treat those as preferences: a
+      // `40 | 600 | 40` row on a 375px screen narrows its columns in
+      // proportion and the text rewraps (Kit, hbr.org). Scaling the whole row
+      // instead shrank its text to 55%. Each sized cell shares the line by
+      // its width (spacers stay fixed); a row that fits keeps its exact
+      // widths. Cell heights come from a real layout, not intrinsics.
+      row = ProportionalRow(
+        widths: [for (final c in cells) (c as SizedBox).width!],
+        shrinkable: [
+          for (final c in cells)
+            (c as SizedBox).child != null && c.width! > 0,
+        ],
+        children: cells,
       );
     } else {
       // All cells are fixed-width and can't shrink, so widths summing slightly

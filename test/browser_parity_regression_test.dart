@@ -601,6 +601,42 @@ void main() {
     expect(text.top, lessThan(image.bottom));
   });
 
+  testWidgets('a fixed 40|600|40 row narrows on a phone instead of scaling', (
+    tester,
+  ) async {
+    // Kit (hbr.org): a widthless table of fixed cells with a colspan row
+    // takes the row fallback. Scaling that 680px row into 375px shrank the
+    // text to 55%; Chrome narrows the columns and rewraps at full size.
+    await _pump(
+      tester,
+      '<table cellpadding="0" cellspacing="0" align="center"><tr>'
+      '<td width="40"></td><td width="600" style="font-size:16px">'
+      'Diversity and Inclusion is an increasingly popular term these past '
+      'few years, especially in tech.</td><td width="40"></td></tr>'
+      '<tr><td colspan="3" height="20"></td></tr></table>',
+    );
+    expect(tester.takeException(), isNull);
+    final text = find.textContaining('Diversity');
+    final painted = tester.getRect(text);
+    final laidOut = tester.renderObject<RenderBox>(text).size;
+    expect(painted.width, closeTo(laidOut.width, 0.5));
+    expect(painted.right, lessThanOrEqualTo(375.5));
+    expect(painted.left, greaterThan(10));
+  });
+
+  testWidgets('a fixed row that fits keeps its exact widths', (tester) async {
+    await _pump(
+      tester,
+      '<table cellpadding="0" cellspacing="0"><tr>'
+      '<td width="40"></td><td width="200">Narrow content</td>'
+      '<td width="40"></td></tr><tr><td colspan="3">Footer</td></tr></table>',
+    );
+    expect(
+      tester.getRect(find.textContaining('Narrow content')).left,
+      closeTo(40, 0.5),
+    );
+  });
+
   testWidgets('a clear:both wrapper puts its float under the previous one', (
     tester,
   ) async {
