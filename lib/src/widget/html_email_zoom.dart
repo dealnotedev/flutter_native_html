@@ -9,26 +9,67 @@ import '../config/html_render_config.dart';
 /// Reads and resets the pinch-zoom state of an [HtmlEmailView] that has
 /// [HtmlRenderConfig.zoom] set. One controller drives one view.
 class HtmlZoomController extends ChangeNotifier {
-  double _scale = 1;
+  HtmlZoomConfig? _config;
+  double? _scale;
   double _offsetX = 0;
+  bool _configurationChanged = false;
 
-  /// The current zoom factor (1 = unzoomed).
-  double get scale => _scale;
+  /// The current zoom factor. The initial factor is the configured minimum.
+  double get scale => _scale ?? _config?.minScale ?? 1;
 
   /// How far a zoomed message is panned from its left edge, in screen px.
   double get offsetX => _offsetX;
 
-  /// Back to scale 1, e.g. when the host shows another message.
-  void reset() => _set(1, 0);
+  /// Back to the minimum scale, e.g. when the host shows another message.
+  void reset() => _set(null, 0);
 
-  /// Zooms to [scale] keeping the left edge in place.
-  void zoomTo(double scale) => _set(scale, 0);
+  /// Zooms to [scale] within the configured limits, keeping the left edge in
+  /// place. [scale] must be finite and positive.
+  void zoomTo(double scale) {
+    if (!scale.isFinite || scale <= 0) {
+      throw ArgumentError.value(scale, 'scale', 'must be finite and positive');
+    }
+    _set(scale, 0);
+  }
 
-  void _set(double scale, double offsetX) {
-    if (scale == _scale && offsetX == _offsetX) return;
-    _scale = scale;
+  double _clampScale(double scale) {
+    final config = _config;
+    return config == null
+        ? scale
+        : scale.clamp(config.minScale, config.maxScale).toDouble();
+  }
+
+  void _set(double? scale, double offsetX) {
+    final previous = this.scale;
+    _scale = scale == null ? null : _clampScale(scale);
+    if (this.scale == previous && offsetX == _offsetX) return;
     _offsetX = offsetX;
+    _configurationChanged = false;
     notifyListeners();
+  }
+
+  void _configure(HtmlZoomConfig config) {
+    final previous = scale;
+    _config = config;
+    final requested = _scale;
+    if (requested != null) _scale = _clampScale(requested);
+    if (scale == previous) return;
+    _offsetX = 0;
+    if (_configurationChanged) return;
+    _configurationChanged = true;
+    // The view can apply new bounds during its build. Notify host listeners
+    // after the build so they can safely update their own widgets.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_configurationChanged) return;
+      _configurationChanged = false;
+      notifyListeners();
+    });
+  }
+
+  @override
+  void dispose() {
+    _configurationChanged = false;
+    super.dispose();
   }
 }
 
@@ -60,18 +101,15 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
       widget.controller ?? (_internal ??= HtmlZoomController());
 
   final _boxKey = GlobalKey();
-
-  // Pinch state, captured when the gesture starts.
-  double _startScale = 1;
-  Offset _startContent = Offset.zero; // content point under the fingers
-  double? _startScroll;
-  double _startTop = 0; // the body's global top at the start
+  ({double ratio, Offset from, Offset to})? _pendingZoom;
+  int? _zoomFrame;
 
   Offset? _doubleTapAt;
 
   @override
   void initState() {
     super.initState();
+    _controller._configure(widget.config);
     _controller.addListener(_changed);
   }
 
@@ -83,22 +121,34 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
       old?.removeListener(_changed);
       _controller.addListener(_changed);
     }
+    if (!identical(old, _controller) || oldWidget.config != widget.config) {
+      _cancelZoomFrame();
+      _controller._configure(widget.config);
+    }
   }
 
   @override
   void dispose() {
+    _cancelZoomFrame();
     _controller.removeListener(_changed);
     _internal?.dispose();
     super.dispose();
   }
 
-  void _changed() => setState(() {});
+  void _changed() {
+    _cancelZoomFrame();
+    setState(() {});
+  }
+
+  void _cancelZoomFrame() {
+    final frame = _zoomFrame;
+    if (frame != null) WidgetsBinding.instance.cancelFrameCallbackWithId(frame);
+    _zoomFrame = null;
+    _pendingZoom = null;
+  }
 
   _RenderEmailZoom? get _box =>
       _boxKey.currentContext?.findRenderObject() as _RenderEmailZoom?;
-
-  double _clampScale(double scale) =>
-      scale.clamp(widget.config.minScale, widget.config.maxScale).toDouble();
 
   double _clampOffset(double offsetX, double scale) {
     final box = _box;
@@ -107,49 +157,89 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
     return offsetX.clamp(0.0, max).toDouble();
   }
 
-  ScrollPosition? get _scroll {
-    final position = Scrollable.maybeOf(context)?.position;
-    return position != null && position.axis == Axis.vertical
-        ? position
-        : null;
+  ScrollPosition? get _scroll =>
+      Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
+
+  void _scheduleZoom(double ratio, Offset from, Offset to) {
+    final pending = _pendingZoom;
+    // Compose movement from both fingers before applying the zoom limits.
+    // A pair moving in parallel may momentarily change span between events.
+    _pendingZoom = pending == null
+        ? (ratio: ratio, from: from, to: to)
+        : (
+            ratio: pending.ratio * ratio,
+            from: pending.from,
+            to: to + (pending.to - from) * ratio,
+          );
+    _zoomFrame ??= WidgetsBinding.instance.scheduleFrameCallback((_) {
+      _zoomFrame = null;
+      final zoom = _pendingZoom!;
+      _pendingZoom = null;
+      _zoomAround(zoom.ratio, zoom.from, zoom.to);
+    });
   }
 
-  void _begin(Offset globalFocal) {
+  /// Moves the content under [previousFocal] to [focal] while scaling.
+  void _zoomAround(double requestedRatio, Offset previousFocal, Offset focal) {
     final box = _box;
     if (box == null || !box.hasSize) return;
-    final local = box.globalToLocal(globalFocal);
-    _startScale = _controller.scale;
-    _startContent = Offset(
-      (local.dx + _controller.offsetX) / _startScale,
-      local.dy / _startScale,
-    );
-    _startScroll = _scroll?.pixels;
-    _startTop = box.localToGlobal(Offset.zero).dy;
-  }
-
-  /// Zooms to [scale] keeping the content point captured by [_begin] under
-  /// [globalFocal]: horizontally by panning, vertically by scrolling the host.
-  void _zoomAround(double scale, Offset globalFocal) {
-    final box = _box;
-    if (box == null || !box.hasSize) return;
-    scale = _clampScale(scale);
-    final focalX = globalFocal.dx - box.localToGlobal(Offset.zero).dx;
-    _controller._set(
-      scale,
-      _clampOffset(_startContent.dx * scale - focalX, scale),
-    );
+    final currentScale = _controller.scale;
+    final scale = _controller._clampScale(currentScale * requestedRatio);
+    final ratio = scale / currentScale;
+    final from = box.globalToLocal(previousFocal);
+    final to = box.globalToLocal(focal);
+    final x = (from.dx + _controller.offsetX) * ratio - to.dx;
     final scroll = _scroll;
-    final startScroll = _startScroll;
-    if (scroll == null || startScroll == null) return;
-    // The content point should end at the focal point: move the body's top
-    // to focal.y - content.y * scale.
-    final target =
-        startScroll + _startTop - (globalFocal.dy - _startContent.dy * scale);
-    // After the next layout the scroll extent reflects the new height.
+    _controller._set(scale, _clampOffset(x, scale));
+    if (scroll != null && scroll.hasPixels && scroll.hasContentDimensions) {
+      _scrollAround(
+        scroll,
+        box,
+        box.heightAtScale(scale) - box.size.height,
+        from.dy * ratio - to.dy,
+      );
+    }
+  }
+
+  void _scrollAround(
+    ScrollPosition scroll,
+    _RenderEmailZoom box,
+    double heightChange,
+    double delta,
+  ) {
+    // A reversed viewport positions the body from its bottom edge.
+    final correction = scroll.axisDirection == AxisDirection.up
+        ? heightChange - delta
+        : delta;
+    final min = scroll.minScrollExtent;
+    var trailingEdge = scroll.maxScrollExtent;
+    if (heightChange != 0 && trailingEdge == min) {
+      // A non-scrolling viewport can have unused space. Recover the
+      // unclamped trailing edge before adding the new body height.
+      final viewport = RenderAbstractViewport.maybeOf(box.parent);
+      if (viewport case RenderObjectWithChildMixin<RenderBox>(:final child?)) {
+        trailingEdge = viewport!.getOffsetToReveal(child, 1).offset;
+      } else if (viewport is RenderViewport &&
+          identical(viewport.offset, scroll) &&
+          viewport.center == viewport.firstChild &&
+          viewport.childCount == 1 &&
+          viewport.anchor == 0) {
+        final extent = viewport.firstChild?.geometry?.scrollExtent;
+        if (extent != null) trailingEdge = extent - scroll.viewportDimension;
+      }
+    }
+    final max = math.max(min, trailingEdge + heightChange);
+    final pixels = (scroll.pixels + correction).clamp(min, max).toDouble();
+    if (pixels == scroll.pixels) return;
+    // Update before layout so the new scale and scroll offset paint together.
+    scroll.jumpTo(pixels);
+    // A short or lazy viewport can report a different extent after layout.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!scroll.hasContentDimensions) return;
+      if (!mounted || !identical(scroll, _scroll) || !scroll.outOfRange) return;
       scroll.jumpTo(
-        target.clamp(scroll.minScrollExtent, scroll.maxScrollExtent).toDouble(),
+        scroll.pixels
+            .clamp(scroll.minScrollExtent, scroll.maxScrollExtent)
+            .toDouble(),
       );
     });
   }
@@ -163,9 +253,9 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
     final at = _doubleTapAt;
     final target = widget.config.doubleTapScale;
     if (at == null || target == null) return;
-    _begin(at);
-    final zoomed = _controller.scale > widget.config.minScale + 0.01;
-    _zoomAround(zoomed ? widget.config.minScale : target, at);
+    final scale = _controller.scale;
+    final minimum = widget.config.minScale;
+    _scheduleZoom((scale > minimum + 0.01 ? minimum : target) / scale, at, at);
   }
 
   @override
@@ -175,10 +265,7 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
       _PinchGestureRecognizer:
           GestureRecognizerFactoryWithHandlers<_PinchGestureRecognizer>(
             () => _PinchGestureRecognizer(debugOwner: this),
-            (recognizer) => recognizer
-              ..onStart = _begin
-              ..onUpdate = (scale, focal) =>
-                  _zoomAround(_startScale * scale, focal),
+            (recognizer) => recognizer.onUpdate = _scheduleZoom,
           ),
       if (widget.config.doubleTapScale != null)
         DoubleTapGestureRecognizer:
@@ -203,6 +290,7 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
             ),
     };
     return RawGestureDetector(
+      behavior: HitTestBehavior.opaque,
       gestures: gestures,
       child: _EmailZoomBox(
         key: _boxKey,
@@ -217,67 +305,70 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
 /// Recognises only two-finger pinches. A single finger never wins, so the
 /// host's vertical scroll (and taps) keep the one-finger gestures.
 class _PinchGestureRecognizer extends OneSequenceGestureRecognizer {
-  _PinchGestureRecognizer({super.debugOwner});
+  _PinchGestureRecognizer({super.debugOwner})
+    : super(supportedDevices: const {PointerDeviceKind.touch});
 
-  void Function(Offset focal)? onStart;
-  void Function(double scale, Offset focal)? onUpdate;
+  void Function(double ratio, Offset previousFocal, Offset focal)? onUpdate;
 
   final _points = <int, Offset>{};
-  double? _initialSpan;
-  bool _accepted = false;
 
   @override
   void addAllowedPointer(PointerDownEvent event) {
     super.addAllowedPointer(event);
     _points[event.pointer] = event.position;
-    if (_points.length == 2) _initialSpan = _span;
-  }
-
-  double get _span {
-    final values = _points.values.take(2).toList();
-    return (values[0] - values[1]).distance;
-  }
-
-  Offset get _focal {
-    final values = _points.values.take(2).toList();
-    return (values[0] + values[1]) / 2;
+    // Claim both arenas on the second touch, before either axis drag can win.
+    if (_points.length >= 2) resolve(GestureDisposition.accepted);
   }
 
   @override
+  void handleNonAllowedPointer(PointerDownEvent event) {}
+
+  @override
   void handleEvent(PointerEvent event) {
+    if (!_points.containsKey(event.pointer)) return;
     if (event is PointerMoveEvent) {
-      _points[event.pointer] = event.position;
-      final initial = _initialSpan;
-      if (_points.length < 2 || initial == null || initial <= 0) return;
-      if (!_accepted) {
-        if ((_span - initial).abs() < kScaleSlop) return;
-        _accepted = true;
-        resolve(GestureDisposition.accepted);
-        onStart?.call(_focal);
-        _initialSpan = _span;
-        return;
-      }
-      onUpdate?.call(_span / _initialSpan!, _focal);
+      _move(event);
     } else if (event is PointerUpEvent || event is PointerCancelEvent) {
-      _points.remove(event.pointer);
-      stopTrackingPointer(event.pointer);
-      if (_points.length < 2) _initialSpan = null;
+      resolvePointer(event.pointer, GestureDisposition.rejected);
+      _stopPointer(event.pointer);
+    }
+  }
+
+  void _move(PointerMoveEvent event) {
+    final first = _points.entries.first;
+    final second = _points.length >= 2 ? _points.entries.elementAt(1) : null;
+    _points[event.pointer] = event.position;
+    if (second == null ||
+        (event.pointer != first.key && event.pointer != second.key)) {
+      return;
+    }
+    final span = (first.value - second.value).distance;
+    final a = _points[first.key]!;
+    final b = _points[second.key]!;
+    // Use consecutive positions of the same pair. A replacement pointer
+    // starts from its own position and keeps the scale already on screen.
+    if (span > 0) {
+      onUpdate?.call(
+        (a - b).distance / span,
+        (first.value + second.value) / 2,
+        (a + b) / 2,
+      );
     }
   }
 
   @override
-  void didStopTrackingLastPointer(int pointer) {
-    _points.clear();
-    _initialSpan = null;
-    _accepted = false;
+  void rejectGesture(int pointer) {
+    _stopPointer(pointer);
+    resolvePointer(pointer, GestureDisposition.rejected);
+  }
+
+  void _stopPointer(int pointer) {
+    _points.remove(pointer);
+    stopTrackingPointer(pointer);
   }
 
   @override
-  void rejectGesture(int pointer) {
-    _points.remove(pointer);
-    if (_points.length < 2) _initialSpan = null;
-    super.rejectGesture(pointer);
-  }
+  void didStopTrackingLastPointer(int pointer) {}
 
   @override
   String get debugDescription => 'pinch';
@@ -323,14 +414,18 @@ class _RenderEmailZoom extends RenderProxyBox {
     if (value == _offsetX) return;
     _offsetX = value;
     markNeedsPaint();
+    markNeedsSemanticsUpdate();
   }
 
   double get contentWidth => child?.size.width ?? 0;
+  double heightAtScale(double scale) =>
+      constraints.constrainHeight((child?.size.height ?? 0) * scale);
 
   bool get _identity => _scale == 1 && _offsetX == 0;
 
-  Matrix4 get _transform => Matrix4.translationValues(-_offsetX, 0, 0)
-    ..multiply(Matrix4.diagonal3Values(_scale, _scale, 1));
+  Matrix4 get _transform =>
+      Matrix4.translationValues(-_offsetX, 0, 0)
+        ..multiply(Matrix4.diagonal3Values(_scale, _scale, 1));
 
   @override
   void performLayout() {
