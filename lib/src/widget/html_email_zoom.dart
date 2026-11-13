@@ -542,4 +542,8 @@ class _RenderEmailZoom extends RenderProxyBox {
   void applyPaintTransform(RenderBox child, Matrix4 transform) {
     if (!_identity) transform.multiply(_transform);
   }
+
+  @override
+  Rect? describeApproximatePaintClip(RenderObject child) =>
+      _identity ? null : Offset.zero & size;
 }

@@ -82,6 +82,7 @@ class HtmlZoomConfig {
 class HtmlRenderConfig {
   const HtmlRenderConfig({
     this.imageResolver = const DefaultHtmlImageResolver(),
+    this.pauseOffscreenImageAnimations = false,
     this.sanitizer = const HtmlSanitizer(),
     this.handlers = const [],
     this.onLinkTap,
@@ -139,6 +140,10 @@ class HtmlRenderConfig {
   /// Resolves `<img src>` to an image (or blocks it). Defaults to the
   /// privacy-first resolver that suppresses remote images.
   final HtmlImageResolver imageResolver;
+
+  /// In native scroll views, pause images outside the viewport and isolate
+  /// visible animation frames from the rest of the document's paint work.
+  final bool pauseOffscreenImageAnimations;
 
   /// Strips unsafe/unsupported markup before rendering.
   final HtmlSanitizer sanitizer;
@@ -247,6 +252,7 @@ class HtmlRenderConfig {
 
   HtmlRenderConfig copyWith({
     HtmlImageResolver? imageResolver,
+    bool? pauseOffscreenImageAnimations,
     HtmlSanitizer? sanitizer,
     List<HtmlElementHandler>? handlers,
     Object? onLinkTap = _unsetConfigValue,
@@ -277,6 +283,8 @@ class HtmlRenderConfig {
   }) {
     return HtmlRenderConfig(
       imageResolver: imageResolver ?? this.imageResolver,
+      pauseOffscreenImageAnimations:
+          pauseOffscreenImageAnimations ?? this.pauseOffscreenImageAnimations,
       sanitizer: sanitizer ?? this.sanitizer,
       handlers: handlers ?? this.handlers,
       onLinkTap: identical(onLinkTap, _unsetConfigValue)

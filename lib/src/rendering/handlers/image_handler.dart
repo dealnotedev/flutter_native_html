@@ -5,6 +5,7 @@ import 'package:html/dom.dart' as dom;
 import '../../config/html_image_resolver.dart';
 import '../../css/css_length.dart';
 import '../../css/html_style.dart';
+import '../../widget/html_image.dart';
 import '../css_border_radius.dart';
 import '../element_handler.dart';
 import '../html_build_result.dart';
@@ -68,13 +69,15 @@ class ImageHandler extends HtmlElementHandler {
 
     Widget child;
     if (resolution.hasImage) {
-      child = Image(
+      child = buildHtmlImage(
+        pauseOffscreenAnimations: config.pauseOffscreenImageAnimations,
         image: resolution.provider!,
         width: width,
         height: height,
         fit: context.style.objectFit ?? BoxFit.contain,
         semanticLabel: alt?.trim().isNotEmpty == true ? alt!.trim() : null,
         excludeFromSemantics: alt?.trim().isNotEmpty != true,
+        animate: context.style.visibilityHidden != true,
         errorBuilder: (_, _, _) => _fallback(context, alt),
       );
     } else if (resolution.blockedRemote) {

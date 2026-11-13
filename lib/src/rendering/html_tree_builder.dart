@@ -10,6 +10,7 @@ import '../css/css_color.dart';
 import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
+import '../widget/html_image.dart';
 import 'css_border_decoration.dart';
 import 'css_border_radius.dart';
 import 'element_registry.dart';
@@ -2089,7 +2090,8 @@ class HtmlTreeBuilder {
           clipBehavior: Clip.hardEdge,
           children: [
             Positioned.fill(
-              child: Image(
+              child: buildHtmlImage(
+                pauseOffscreenAnimations: config.pauseOffscreenImageAnimations,
                 image: resolution.provider!,
                 fit: fit,
                 alignment: style.backgroundPosition ?? Alignment.center,
@@ -2112,7 +2114,11 @@ class HtmlTreeBuilder {
           Positioned(
             left: x,
             top: y,
-            child: Image(image: resolution.provider!, width: spriteWidth),
+            child: buildHtmlImage(
+              pauseOffscreenAnimations: config.pauseOffscreenImageAnimations,
+              image: resolution.provider!,
+              width: spriteWidth,
+            ),
           ),
           content,
         ],
