@@ -634,10 +634,14 @@ class HtmlTreeBuilder {
             TextSpan(
               children: [
                 if (padding.left > 0)
-                  WidgetSpan(child: SizedBox(width: padding.left, height: 0)),
+                  InlineSpacerSpan(
+                    child: SizedBox(width: padding.left, height: 0),
+                  ),
                 span,
                 if (padding.right > 0)
-                  WidgetSpan(child: SizedBox(width: padding.right, height: 0)),
+                  InlineSpacerSpan(
+                    child: SizedBox(width: padding.right, height: 0),
+                  ),
               ],
             ),
           ),
@@ -1241,7 +1245,7 @@ class HtmlTreeBuilder {
         // Plain CSS text splits extra line-height evenly. Inline placeholders
         // already contribute ascent/descent from their measured boxes; applying
         // even leading to that paragraph again inflates image and badge rows.
-        final distribution = spans.any(_hasInlineWidget)
+        final distribution = spans.any(_hasInlineWidgetWithHeight)
             ? TextLeadingDistribution.proportional
             : TextLeadingDistribution.even;
         final uniformText = spans.every(
@@ -1550,9 +1554,10 @@ class HtmlTreeBuilder {
   /// an inline child with a smaller line-height can't collapse the line box
   /// (matches CSS: the line box is at least the block's line-height). Returns
   /// null when the block sets no line-height.
-  static bool _hasInlineWidget(InlineSpan span) =>
-      span is WidgetSpan ||
-      (span is TextSpan && (span.children?.any(_hasInlineWidget) ?? false));
+  static bool _hasInlineWidgetWithHeight(InlineSpan span) =>
+      (span is WidgetSpan && span is! InlineSpacerSpan) ||
+      (span is TextSpan &&
+          (span.children?.any(_hasInlineWidgetWithHeight) ?? false));
 
   static bool _hasUniformTextMetrics(
     InlineSpan span,

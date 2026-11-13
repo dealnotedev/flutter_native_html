@@ -156,7 +156,21 @@ class AnchorHandler extends HtmlElementHandler {
           child: context.builder.flow(children, context.style),
         );
       }
-      var box = context.builder.decorate(content, context.style, inline: true);
+      // Width and height apply to inline-block links. A decorated inline link
+      // still gets its dimensions from the line box.
+      final boxStyle = isInlineBlock
+          ? context.style
+          : context.style.merge(
+              const HtmlStyle(
+                width: CssLength.auto,
+                minWidth: CssLength.auto,
+                maxWidth: CssLength.auto,
+                height: CssLength.auto,
+                minHeight: CssLength.auto,
+                maxHeight: CssLength.auto,
+              ),
+            );
+      var box = context.builder.decorate(content, boxStyle, inline: true);
       if (href != null && onTap != null) {
         box = _tappable(box, () => onTap(href, attrs));
       }
@@ -217,14 +231,29 @@ class AnchorHandler extends HtmlElementHandler {
   static bool _linkNeedsInlineBox(HtmlStyle style) {
     final width = style.width;
     final height = style.height;
-    return (style.padding != null && !style.padding!.isEmpty) ||
-        style.borders != null ||
+    final padding = style.padding;
+    final borders = style.borders;
+    return (padding != null &&
+            [
+              padding.top,
+              padding.right,
+              padding.bottom,
+              padding.left,
+            ].any((edge) => edge != null && edge.value > 0)) ||
+        (borders != null &&
+            [borders.top, borders.right, borders.bottom, borders.left].any(
+              (side) =>
+                  side != null &&
+                  side.style != CssBorderStyle.none &&
+                  (side.width > 0 || side.hairline),
+            )) ||
         style.backgroundColor != null ||
         style.backgroundImage != null ||
         (style.borderRadius != null && style.borderRadius! > 0) ||
         style.borderRadiusGeometry != null ||
-        (width != null && !width.isAuto) ||
-        (height != null && !height.isAuto);
+        (style.display == CssDisplay.inlineBlock &&
+            ((width != null && !width.isAuto) ||
+                (height != null && !height.isAuto)));
   }
 
   static bool _isPlainInlineText(List<HtmlBuildResult> children) {
@@ -307,7 +336,7 @@ class AnchorHandler extends HtmlElementHandler {
     ),
   );
 
-  static WidgetSpan _spacer(double width) => WidgetSpan(
+  static WidgetSpan _spacer(double width) => InlineSpacerSpan(
     alignment: PlaceholderAlignment.middle,
     child: SizedBox(width: width),
   );
@@ -335,10 +364,14 @@ class AnchorHandler extends HtmlElementHandler {
       );
     }
     if (span is WidgetSpan && onTap != null) {
+      final child = _tappable(span.child, onTap);
+      if (span is InlineSpacerSpan) {
+        return InlineSpacerSpan(alignment: span.alignment, child: child);
+      }
       return WidgetSpan(
         alignment: span.alignment,
         baseline: span.baseline,
-        child: _tappable(span.child, onTap),
+        child: child,
       );
     }
     return span;

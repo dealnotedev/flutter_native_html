@@ -85,6 +85,68 @@ void main() {
     expect(_richContaining(tester, 'Watch now'), isNotNull);
   });
 
+  testWidgets(
+    'a table button centers a plain inline link despite CSS dimensions',
+    (tester) async {
+      const label = 'Accept invitation';
+      const href = 'https://example.test/invite';
+      final taps = <String>[];
+      for (final (width, height) in [(390.0, 44.0), (700.0, 36.0)]) {
+        await tester.pumpWidget(
+          _host(
+            '''
+          <style>
+            a, span { border:0 !important; padding:0 !important; }
+            @media (max-width:600px) {
+              td, a, span { height:44px !important; line-height:24px !important; }
+            }
+          </style>
+          <table cellpadding="0" cellspacing="0" style="font-size:16px;line-height:30px">
+            <tr><td align="center" height="36" style="background:#625afa;border-radius:4px">
+              <a href="$href" style="height:28px;width:100%;color:white">
+                <span style="white-space:nowrap;height:36px;font-weight:bold">&nbsp;&nbsp;$label&nbsp;&nbsp;</span>
+              </a>
+            </td></tr>
+          </table>
+          ''',
+            width: width,
+            config: HtmlRenderConfig(onLinkTap: (url, _) => taps.add(url)),
+          ),
+        );
+
+        final button = tester.getRect(
+          find.byWidgetPredicate((widget) {
+            final decoration = widget is DecoratedBox
+                ? widget.decoration
+                : null;
+            return decoration is BoxDecoration &&
+                decoration.color == const Color(0xff625afa);
+          }),
+        );
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.byWidget(_richContaining(tester, label)!),
+        );
+        final start = paragraph.text.toPlainText().indexOf(label);
+        final textBox = paragraph
+            .getBoxesForSelection(
+              TextSelection(
+                baseOffset: start,
+                extentOffset: start + label.length,
+              ),
+            )
+            .single
+            .toRect();
+        final labelCenter = paragraph.localToGlobal(textBox.center);
+        expect(button.height, closeTo(height, 0.1));
+        expect(labelCenter.dy, closeTo(button.center.dy, 2));
+        expect(labelCenter.dx, closeTo(button.center.dx, 1));
+        await tester.tapAt(Offset(button.left + 2, button.center.dy));
+        expect(tester.takeException(), isNull);
+      }
+      expect(taps, [href, href]);
+    },
+  );
+
   testWidgets('meaningful empty-looking inline content is preserved', (
     tester,
   ) async {
@@ -1053,6 +1115,10 @@ void main() {
       greaterThan(44),
     );
     expect(tester.getSize(button).height, closeTo(44, 1));
+    expect(
+      paragraph.localToGlobal(ink.single.toRect().center).dy,
+      closeTo(tester.getRect(button).center.dy, 2),
+    );
   });
 
   testWidgets('a fixed-width content table keeps its width on a wide screen', (

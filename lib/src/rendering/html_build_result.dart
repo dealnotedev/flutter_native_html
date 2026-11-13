@@ -21,6 +21,12 @@ class InlineResult extends HtmlBuildResult {
   final bool isWhitespaceOnly;
 }
 
+/// Horizontal padding or margin in a text run. It reserves width without
+/// changing the line-height distribution of the surrounding text.
+class InlineSpacerSpan extends WidgetSpan {
+  const InlineSpacerSpan({required super.child, super.alignment});
+}
+
 /// A block-level widget that breaks the current text run.
 class BlockResult extends HtmlBuildResult {
   const BlockResult(this.widget, {this.clears = false});
