@@ -1400,7 +1400,30 @@ class HtmlTreeBuilder {
 
     void flushColumns() {
       if (columns.isEmpty) return;
-      if (columns.every((c) => c.float == null)) {
+      if (columns.length > 1 &&
+          columns.first.float != null &&
+          columns.every(
+            (c) =>
+                c.float == columns.first.float &&
+                c.floatWidth?.isFinite == true,
+          )) {
+        // Size floats against the space in this block. Viewport-based flex
+        // estimates lose the widths of small tables inside shrink-to-fit cells.
+        target.add(
+          Wrap(
+            textDirection: columns.first.float == 'right'
+                ? TextDirection.rtl
+                : TextDirection.ltr,
+            alignment: containerStyle.effectiveTextAlign == TextAlign.center
+                ? WrapAlignment.center
+                : WrapAlignment.start,
+            children: [
+              for (final c in columns)
+                SizedBox(width: c.floatWidth, child: c.widget),
+            ],
+          ),
+        );
+      } else if (columns.every((c) => c.float == null)) {
         // Inline-block columns wrap like the inline boxes they are: a line
         // takes columns until the next would overflow it (105% tolerates
         // rounded `33.34%` triples), and each keeps its own share. Their

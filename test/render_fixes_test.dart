@@ -2300,6 +2300,63 @@ void main() {
     expect(groupCenter, closeTo(viewCenter, 2));
   });
 
+  testWidgets('auto-width floated image tables fit and wrap inside a cell', (
+    tester,
+  ) async {
+    const pixel =
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    String icon(int index) =>
+        '''
+      <table align="left" cellspacing="0" cellpadding="0" style="display:inline;float:left">
+        <tr><td style="padding:0 ${index == 3 ? 0 : 10}px 9px 0">
+          <a href="https://example.test/$index"><img src="$pixel" width="48" height="48" style="display:block"></a>
+        </td></tr>
+      </table>
+    ''';
+
+    for (final width in [390.0, 156.0, 390.0]) {
+      await tester.pumpWidget(
+        _host('''
+          <table width="100%" cellspacing="0" cellpadding="0">
+            <tr><td align="center" style="padding:0 18px">
+              <table align="center" cellspacing="0" cellpadding="0">
+                <tr><td align="center">
+                  ${List.generate(4, icon).join('\n')}
+                </td></tr>
+              </table>
+            </td></tr>
+          </table>
+          ''', width: width),
+      );
+      final email = tester.getRect(find.byType(HtmlEmailView));
+      final imageWidgets = find.byType(Image);
+      expect(imageWidgets, findsNWidgets(4));
+      final images = [
+        for (var i = 0; i < 4; i++) tester.getRect(imageWidgets.at(i)),
+      ];
+      for (final image in images) {
+        expect(image.width, closeTo(48, 0.1));
+        expect(image.left, greaterThanOrEqualTo(email.left + 18 - 0.1));
+        expect(image.right, lessThanOrEqualTo(email.right - 18 + 0.1));
+      }
+      if (width == 390) {
+        for (var i = 1; i < images.length; i++) {
+          expect(images[i].top, closeTo(images.first.top, 0.1));
+          expect(images[i].left - images[i - 1].right, closeTo(10, 0.1));
+        }
+        expect(
+          (images.first.left + images.last.right) / 2,
+          closeTo(email.center.dx, 0.1),
+        );
+      } else {
+        expect(images[1].top, closeTo(images[0].top, 0.1));
+        expect(images[2].top, greaterThan(images[1].bottom));
+        expect(images[3].top, closeTo(images[2].top, 0.1));
+      }
+      expect(tester.takeException(), isNull);
+    }
+  });
+
   testWidgets('responsive menu image cells stay in horizontal rows', (
     tester,
   ) async {
