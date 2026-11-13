@@ -1432,11 +1432,11 @@ class TableHandler extends HtmlElementHandler {
           // Known rigid content (sized images, padding) that fitting the
           // column to a narrower table must not cut into.
           floor: imageOnly && imageFloor > fixedPad ? imageFloor : fixedPad,
-          // Only a table sized by its container (`%`/auto) narrows its fixed
-          // columns; a `width="600"` table keeps 600px and overflows, as in
-          // Chrome. fitToWidth lays a desktop email out at its natural width
-          // and scales the result, so there the widths stay rigid too.
-          shrinkFloor: context.config.fitToWidth || _hasPxWidth(context.style)
+          // Report the preferred width to fitToWidth when it measures the
+          // natural layout. If its scale floor caps the actual layout width,
+          // let the columns shrink within that width.
+          preservePreferredIntrinsicWidth: context.config.fitToWidth,
+          shrinkFloor: !context.config.fitToWidth && _hasPxWidth(context.style)
               ? double.infinity
               : fixedPad,
         );
@@ -1494,11 +1494,13 @@ class TableHandler extends HtmlElementHandler {
         // A one-column image-only email section often relies on an inner
         // `img { width:100% }` to fill the section's fixed/percent table width.
         // IntrinsicColumnWidth probes that percentage image at zero width, so
-        // the whole hero row disappears. Let the sole column consume the
-        // table width; small icon-only columns (without a fill image) retain
-        // their intrinsic sizing below.
+        // the whole hero row disappears. Let the sole column fill the table,
+        // while carrying the minimum width of nested content to its parent.
         hasFlex = true;
-        widths[col] = const FlexColumnWidth(1);
+        widths[col] = const MaxColumnWidth(
+          FlexColumnWidth(1),
+          _FixedOrMinContentColumnWidth(0),
+        );
       } else if ((imageOnly && hasImageOnlyCell) ||
           inlineBlock ||
           intrinsicColumns) {
@@ -1585,6 +1587,7 @@ class TableHandler extends HtmlElementHandler {
         fitted > column.floor ? fitted : column.floor,
         floor: column.floor,
         shrinkFloor: column.shrinkFloor,
+        preservePreferredIntrinsicWidth: column.preservePreferredIntrinsicWidth,
       );
     }
   }
@@ -2999,6 +3002,7 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
     this.px, {
     this.floor = 0,
     this.shrinkFloor = 0,
+    this.preservePreferredIntrinsicWidth = false,
   });
 
   final double px;
@@ -3012,6 +3016,7 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
   /// (and their `max-width:100%` images) before overflowing the line, e.g.
   /// three `width="181"` product cells on a 375px screen.
   final double shrinkFloor;
+  final bool preservePreferredIntrinsicWidth;
 
   double _target(Iterable<RenderBox> cells, double containerWidth) {
     var minContent = 0.0;
@@ -3042,6 +3047,10 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
 
   @override
   double minIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    final target = _target(cells, containerWidth);
+    if (preservePreferredIntrinsicWidth && !containerWidth.isFinite) {
+      return target;
+    }
     // RenderTable shrinks non-flex columns towards this only when the
     // columns' preferred widths overflow the table's constraints.
     var minContent = shrinkFloor;
@@ -3049,7 +3058,6 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
       final c = cell.getMinIntrinsicWidth(double.infinity);
       if (c > minContent) minContent = c;
     }
-    final target = _target(cells, containerWidth);
     return minContent < target ? minContent : target;
   }
 

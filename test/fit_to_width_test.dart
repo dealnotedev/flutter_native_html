@@ -112,6 +112,55 @@ void main() {
     expect(_painted(tester), closeTo(300, 2));
   });
 
+  const pixel =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+  final image = '<img src="$pixel" width="240" height="120">';
+  final grid =
+      '''
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td width="240">$image</td><td width="10"></td><td width="240">$image</td>
+    </tr></table>
+  ''';
+
+  for (final (minScale, layoutWidth) in [(0.5, 510.0), (0.8, 450.0)]) {
+    testWidgets('a nested image grid fits with min scale $minScale', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        '''
+        <style>@media (max-width:480px) {
+          .gallery img {width:100%; max-width:100%; height:auto}
+        }</style>
+        <div style="padding:0 10px">
+          <table class="gallery" width="100%" cellpadding="0" cellspacing="0">
+            <tr><td>$grid</td></tr>
+            <tr><td>$grid</td></tr>
+          </table>
+        </div>
+        ''',
+        host: 360,
+        fit: true,
+        minScale: minScale,
+      );
+
+      final email = tester.getRect(find.byType(HtmlEmailView));
+      final images = find.byType(Image);
+      expect(images, findsNWidgets(4));
+      for (var row = 0; row < 2; row++) {
+        final left = tester.getRect(images.at(row * 2));
+        final right = tester.getRect(images.at(row * 2 + 1));
+        expect(left.width, greaterThan(0));
+        expect(right.width, closeTo(left.width, 0.1));
+        expect(left.left, greaterThan(email.left));
+        expect(right.left, greaterThanOrEqualTo(left.right));
+        expect(right.right, lessThanOrEqualTo(email.right + 0.1));
+      }
+      expect(_local(tester), closeTo(layoutWidth - 20, 0.1));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('ordinary wrapping text is not globally scaled', (tester) async {
     await _pump(
       tester,
