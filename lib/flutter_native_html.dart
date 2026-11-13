@@ -16,6 +16,7 @@ library;
 
 // Widget
 export 'src/widget/html_email_view.dart';
+export 'src/widget/html_email_zoom.dart' show HtmlEmailZoom, HtmlZoomController;
 
 // Configuration & policies
 export 'src/config/html_render_config.dart';

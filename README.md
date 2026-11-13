@@ -41,6 +41,32 @@ applied first; only a layout that remains oversized is scaled. The minimum
 scale is a readability floor, after which extreme layouts reflow instead of
 painting unreachable content beyond the viewport.
 
+### Pinch-to-zoom
+
+Off by default. Enable it with `zoom`; an optional controller reads or resets
+the scale (a view without one resets it for each new message):
+
+```dart
+final zoom = HtmlZoomController();
+
+HtmlEmailView(
+  html: html,
+  zoomController: zoom, // optional: zoom.scale, zoom.reset()
+  config: const HtmlRenderConfig(
+    zoom: HtmlZoomConfig(minScale: 1, maxScale: 3, doubleTapScale: 2),
+  ),
+)
+```
+
+The zoom is visual (the layout is not recomputed) and works inside the
+host's scroll view: the body reports its scaled height, so one finger keeps
+scrolling vertically, two fingers zoom around their focal point (the host's
+vertical scroll is adjusted to keep it under the fingers), one finger pans
+horizontally only while zoomed, and a double tap toggles between `minScale`
+and `doubleTapScale`. Links and text selection keep working through the
+transform. With double tap enabled, a single tap on a link fires after the
+double-tap timeout; pass `doubleTapScale: null` to avoid that delay.
+
 Untrusted inputs are bounded by `maxHtmlCharacters`, `maxDomNodes`,
 `maxCssCharacters`, and `maxCssRules`. The default resolver also caps encoded
 payloads and decoded image dimensions.

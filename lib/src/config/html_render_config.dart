@@ -37,6 +37,43 @@ enum HtmlEmailColorMode {
   dark,
 }
 
+/// Pinch-to-zoom of the message body (see [HtmlRenderConfig.zoom]).
+///
+/// The zoom is visual: the email keeps its layout and is scaled around the
+/// fingers, as mail apps do. Its reported height grows with the scale, so the
+/// host's vertical scroll view keeps scrolling it with one finger.
+@immutable
+class HtmlZoomConfig {
+  const HtmlZoomConfig({
+    this.minScale = 1.0,
+    this.maxScale = 3.0,
+    this.doubleTapScale = 2.0,
+  }) : assert(minScale > 0 && minScale <= maxScale),
+       assert(maxScale < double.infinity),
+       assert(
+         doubleTapScale == null ||
+             (doubleTapScale >= minScale && doubleTapScale <= maxScale),
+       );
+
+  final double minScale;
+  final double maxScale;
+
+  /// The scale a double tap zooms to (and back to [minScale] from a zoomed
+  /// state). Null disables double tap; with it, a single tap on a link waits
+  /// for the double-tap timeout before it fires.
+  final double? doubleTapScale;
+
+  @override
+  bool operator ==(Object other) =>
+      other is HtmlZoomConfig &&
+      other.minScale == minScale &&
+      other.maxScale == maxScale &&
+      other.doubleTapScale == doubleTapScale;
+
+  @override
+  int get hashCode => Object.hash(minScale, maxScale, doubleTapScale);
+}
+
 /// Immutable configuration for [HtmlEmailView].
 ///
 /// Holds the rendering policy (image loading, link handling), styling defaults,
@@ -70,6 +107,7 @@ class HtmlRenderConfig {
     this.maxCssCharacters = 512 * 1024,
     this.maxCssRules = 10000,
     this.enableTextSelection = true,
+    this.zoom,
   }) : assert(
          fitToWidthMinScale > 0 && fitToWidthMinScale <= 1,
          'fitToWidthMinScale must be greater than 0 and at most 1',
@@ -197,6 +235,11 @@ class HtmlRenderConfig {
   /// Enables native text selection/copy across the rendered message.
   final bool enableTextSelection;
 
+  /// Enables pinch-to-zoom (and double-tap zoom) of the message body. Null,
+  /// the default, leaves the view unzoomable. Read or reset the zoom with
+  /// [HtmlEmailView.zoomController].
+  final HtmlZoomConfig? zoom;
+
   HtmlRenderConfig copyWith({
     HtmlImageResolver? imageResolver,
     HtmlSanitizer? sanitizer,
@@ -224,6 +267,7 @@ class HtmlRenderConfig {
     int? maxCssCharacters,
     int? maxCssRules,
     bool? enableTextSelection,
+    Object? zoom = _unsetConfigValue,
   }) {
     return HtmlRenderConfig(
       imageResolver: imageResolver ?? this.imageResolver,
@@ -274,6 +318,9 @@ class HtmlRenderConfig {
       maxCssCharacters: maxCssCharacters ?? this.maxCssCharacters,
       maxCssRules: maxCssRules ?? this.maxCssRules,
       enableTextSelection: enableTextSelection ?? this.enableTextSelection,
+      zoom: identical(zoom, _unsetConfigValue)
+          ? this.zoom
+          : zoom as HtmlZoomConfig?,
     );
   }
 }

@@ -10,6 +10,7 @@ import '../parsing/html_email_parser.dart';
 import '../rendering/html_tree_builder.dart';
 import 'fallback_horizontal_padding.dart';
 import 'fit_to_width.dart';
+import 'html_email_zoom.dart';
 
 /// A native (no-WebView) widget that renders an HTML email body.
 ///
@@ -25,6 +26,7 @@ class HtmlEmailView extends StatefulWidget {
     super.key,
     required this.html,
     this.config = const HtmlRenderConfig(),
+    this.zoomController,
   }) : document = null;
 
   /// Renders an already parsed/sanitized document. Useful when the host caches
@@ -37,6 +39,7 @@ class HtmlEmailView extends StatefulWidget {
     super.key,
     required this.document,
     this.config = const HtmlRenderConfig(),
+    this.zoomController,
   }) : html = '';
 
   /// The raw HTML email body.
@@ -46,6 +49,10 @@ class HtmlEmailView extends StatefulWidget {
   /// Rendering configuration (image policy, link handling, styling, custom
   /// handlers). Defaults to the privacy-first configuration.
   final HtmlRenderConfig config;
+
+  /// Reads or resets the pinch zoom when [HtmlRenderConfig.zoom] is set.
+  /// Without one, the view keeps its own and resets it for a new message.
+  final HtmlZoomController? zoomController;
 
   @override
   State<HtmlEmailView> createState() => _HtmlEmailViewState();
@@ -62,6 +69,10 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
   Brightness? _renderedBrightness;
   String? _renderedFontFamily;
   bool _contentRejected = false;
+  HtmlZoomController? _ownZoom;
+
+  HtmlZoomController get _zoomController =>
+      widget.zoomController ?? (_ownZoom ??= HtmlZoomController());
 
   @override
   void didChangeDependencies() {
@@ -84,11 +95,17 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
       _parsed = null; // re-parse on next build
       _disposeBuilder();
     }
+    // A new message starts unzoomed (a host controller is the host's call).
+    if (oldWidget.html != widget.html ||
+        !identical(oldWidget.document, widget.document)) {
+      _ownZoom?.reset();
+    }
   }
 
   @override
   void dispose() {
     _disposeBuilder();
+    _ownZoom?.dispose();
     super.dispose();
   }
 
@@ -234,19 +251,28 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
         return rendered;
       },
     );
-    if (config.fallbackHorizontalPadding == 0 || config.handlers.isNotEmpty) {
-      return layout;
-    }
-    return HtmlFallbackHorizontalPadding(
-      padding: config.fallbackHorizontalPadding,
-      estimateInsets: (width) => estimateHtmlDocumentInsets(
-        parsed,
-        availableWidth: width,
-        config: config,
-        textDirection: textDirection,
-        brightness: brightness,
-      ),
-      child: layout,
+    final Widget body =
+        config.fallbackHorizontalPadding == 0 || config.handlers.isNotEmpty
+        ? layout
+        : HtmlFallbackHorizontalPadding(
+            padding: config.fallbackHorizontalPadding,
+            estimateInsets: (width) => estimateHtmlDocumentInsets(
+              parsed,
+              availableWidth: width,
+              config: config,
+              textDirection: textDirection,
+              brightness: brightness,
+            ),
+            child: layout,
+          );
+    final zoom = config.zoom;
+    if (zoom == null) return body;
+    // Outside the cached layout: zooming repaints and resizes, never
+    // rebuilds or re-lays out the email itself.
+    return HtmlEmailZoom(
+      config: zoom,
+      controller: _zoomController,
+      child: body,
     );
   }
 }
