@@ -49,24 +49,47 @@ class EmlMessage {
     String? text;
     final inline = <String, Uint8List>{};
 
-    void visit(_Entity e) {
+    void visit(_Entity e, Map<String, Uint8List> resources) {
+      if (e.isAttachment) return;
+      if (e.mediaType == 'multipart/related' && e.children.isNotEmpty) {
+        final start = _Entity._normalizeContentId(
+          e._param('content-type', 'start'),
+        );
+        final root = start == null
+            ? e.children.first
+            : e.children.firstWhere(
+                (child) => child.contentId == start,
+                orElse: () => e.children.first,
+              );
+        for (final child in e.children) {
+          if (!identical(child, root)) child.collectImages(resources);
+        }
+        visit(root, resources);
+        return;
+      }
       if (e.children.isNotEmpty) {
         for (final child in e.children) {
-          visit(child);
+          if (child.mediaType.startsWith('image/')) {
+            child.collectImages(resources);
+          } else {
+            visit(child, resources);
+          }
         }
         return;
       }
       final type = e.mediaType;
-      if (type == 'text/html' && html == null && !e.isAttachment) {
-        html = e.decodeText();
-      } else if (type == 'text/plain' && text == null && !e.isAttachment) {
-        text = e.decodeText();
-      } else if (type.startsWith('image/') && e.contentId != null) {
-        inline[e.contentId!] = Uint8List.fromList(e.decodeBytes());
+      if (type == 'text/html' && html == null) {
+        final body = e.decodeText();
+        if (body.trim().isNotEmpty) html = body;
+      } else if (type == 'text/plain' && text == null) {
+        final body = e.decodeText();
+        if (body.trim().isNotEmpty) text = body;
+      } else {
+        e.collectImages(resources);
       }
     }
 
-    visit(root);
+    visit(root, inline);
     return EmlMessage(
       html: html,
       text: text,
@@ -111,15 +134,26 @@ class _Entity {
 
   String? get _charset => _param('content-type', 'charset')?.toLowerCase();
 
-  String? get contentId {
-    final raw = headers['content-id'];
+  String? get contentId => _normalizeContentId(headers['content-id']);
+
+  static String? _normalizeContentId(String? raw) {
     if (raw == null) return null;
     return raw.trim().replaceAll(RegExp(r'^<|>$'), '');
   }
 
-  bool get isAttachment => (headers['content-disposition'] ?? '')
-      .toLowerCase()
-      .contains('attachment');
+  bool get isAttachment =>
+      headers['content-disposition']?.split(';').first.trim().toLowerCase() ==
+      'attachment';
+
+  void collectImages(Map<String, Uint8List> output) {
+    final id = contentId;
+    if (id != null && mediaType.startsWith('image/')) {
+      output.putIfAbsent(id, () => Uint8List.fromList(decodeBytes()));
+    }
+    for (final child in children) {
+      child.collectImages(output);
+    }
+  }
 
   String get _transferEncoding =>
       (headers['content-transfer-encoding'] ?? '7bit').trim().toLowerCase();

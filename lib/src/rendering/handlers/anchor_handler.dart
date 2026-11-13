@@ -45,7 +45,11 @@ class AnchorHandler extends HtmlElementHandler {
     final children = context.builder.buildChildNodes(element, childInherited);
 
     GestureRecognizer? recognizer;
-    final onTap = context.config.onLinkTap;
+    final onTap =
+        context.style.visibilityHidden == true ||
+            context.style.pointerEventsNone == true
+        ? null
+        : context.config.onLinkTap;
     if (href != null && onTap != null) {
       recognizer = TapGestureRecognizer()..onTap = () => onTap(href, attrs);
       context.builder.recognizers.add(recognizer);

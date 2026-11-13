@@ -4,6 +4,7 @@ import 'package:flutter/painting.dart';
 import 'package:html/dom.dart' as dom;
 
 import '../config/html_render_config.dart';
+import '../css/css_selector.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import '../parsing/html_email_parser.dart';
@@ -36,6 +37,7 @@ EmailColorPolicy resolveEmailColorPolicy(
   required double width,
   required HtmlRenderConfig config,
   Brightness brightness = Brightness.light,
+  CssMatchContext? matchContext,
 }) {
   final preferred = switch (config.colorMode) {
     HtmlEmailColorMode.original => Brightness.light,
@@ -59,6 +61,7 @@ EmailColorPolicy resolveEmailColorPolicy(
     rootStyle: base,
     availableWidth: width,
     brightness: Brightness.dark,
+    matchContext: matchContext,
   );
   final scheme =
       (resolver.colorSchemeFor(document.root) ?? document.colorScheme ?? '')
@@ -83,18 +86,21 @@ EmailColorPolicy resolveEmailColorPolicy(
   var simple = config.handlers.isEmpty;
   var hasText = false;
   final html = document.root.parent;
-  if (html != null && document.stylesheet.hasDarkStylesFor(html, width)) {
+  if (html != null && resolver.hasDarkStylesFor(html)) {
     return mediaOnly;
   }
   if (html != null && !_simpleStyle(resolver.resolve(html, base))) {
     simple = false;
   }
-  final pending = <(dom.Element, HtmlStyle)>[(document.root, base)];
+  final rootParent = resolver.documentParentStyle(document.root);
+  final pending = <(dom.Element, HtmlStyle)>[
+    if (rootParent.display != CssDisplay.none) (document.root, rootParent),
+  ];
   while (pending.isNotEmpty) {
     final (element, inherited) = pending.removeLast();
     final style = resolver.resolve(element, inherited.inheritedOnly());
     // Visibility itself may be the theme switch (light/dark logo variants).
-    if (document.stylesheet.hasDarkStylesFor(element, width)) {
+    if (resolver.hasDarkStylesFor(element)) {
       return mediaOnly;
     }
     if (style.display == CssDisplay.none || style.visibilityHidden == true) {

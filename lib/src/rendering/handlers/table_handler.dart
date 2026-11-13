@@ -8,6 +8,7 @@ import '../../widget/fit_to_width.dart';
 import '../element_handler.dart';
 import '../html_build_result.dart';
 import '../html_render_context.dart';
+import '../layout/spanning_table.dart';
 import '../layout/percent_height.dart';
 import '../layout/proportional_row.dart';
 import 'handler_utils.dart';
@@ -157,16 +158,33 @@ class TableHandler extends HtmlElementHandler {
     bool percentWidthAllocated = false,
     bool forceShrinkToFit = false,
   }) {
+    final captions = <Widget>[];
+    for (final caption in table.children.where(
+      (el) => el.localName == 'caption',
+    )) {
+      final captionCtx = context.builder.contextForDescendant(caption, context);
+      if (captionCtx.style.display == CssDisplay.none) continue;
+      captions.add(
+        context.builder.flow(
+          context.builder.buildCustomElement(caption, captionCtx) ??
+              build(caption, captionCtx),
+          captionCtx.style,
+        ),
+      );
+    }
+    Widget withCaptions(Widget grid) => captions.isEmpty
+        ? grid
+        : Column(mainAxisSize: MainAxisSize.min, children: [...captions, grid]);
     final allRows = _rowsOf(table, context);
     if (allRows.isEmpty) {
-      return const _TableBlockResult(SizedBox.shrink(), shrinkWrapWidth: true);
+      return _TableBlockResult(
+        withCaptions(const SizedBox.shrink()),
+        shrinkWrapWidth: true,
+      );
     }
 
     // Resolve every row/cell once.
-    final rows = <dom.Element>[];
     final rowData = <_RowData>[];
-    // `dir="rtl"`/`direction:rtl` lays columns out right-to-left.
-    final rtl = context.style.textDirection == TextDirection.rtl;
     for (final tr in allRows) {
       final rowCtx = context.builder.contextForDescendant(tr, context);
       // Rows are consumed directly by the table renderer rather than through
@@ -175,7 +193,6 @@ class TableHandler extends HtmlElementHandler {
       // and toggle them in @media rules; rendering a hidden row duplicates the
       // whole block.
       if (rowCtx.style.display == CssDisplay.none) continue;
-      rows.add(tr);
       final cellEls = _cellsOf(tr, context);
       final cells = [
         for (final cellEl in cellEls)
@@ -186,8 +203,23 @@ class TableHandler extends HtmlElementHandler {
       ];
       rowData.add(_RowData(rowCtx, cells));
     }
-    if (rows.isEmpty) {
-      return const _TableBlockResult(SizedBox.shrink(), shrinkWrapWidth: true);
+    if (rowData.isEmpty) {
+      return _TableBlockResult(
+        withCaptions(const SizedBox.shrink()),
+        shrinkWrapWidth: true,
+      );
+    }
+    for (var end = rowData.length; end > 0;) {
+      final group = rowData[end - 1].ctx.element?.parent;
+      var start = end - 1;
+      while (start > 0 &&
+          identical(rowData[start - 1].ctx.element?.parent, group)) {
+        start--;
+      }
+      for (var i = start; i < end; i++) {
+        rowData[i].groupEnd = end;
+      }
+      end = start;
     }
 
     final columns = rowData.fold<int>(
@@ -204,6 +236,7 @@ class TableHandler extends HtmlElementHandler {
     // width), or with full-width inline-blocks under @media.
     // Such rows can't be a grid — render them as a vertical stack (fallback).
     final hasStack = rowData.any(_rowStacks);
+    final customRows = context.builder.hasCustomElementHandler('tr');
     // `display:inline-block` cells leave the table-column grid and wrap like
     // ordinary inline boxes. Email templates use this for responsive card
     // rows (fixed cards become 3+1; width:50% cards become a 2x2 grid).
@@ -333,8 +366,10 @@ class TableHandler extends HtmlElementHandler {
         rowData.length == 1 &&
         rowData.single.cells.length == 1 &&
         rowData.single.cells.single.element.querySelector('table') != null;
-    var content = hasStack
-        ? _buildFallback(table, context, rows, rtl, cellSpacing)
+    var content = customRows
+        ? _buildFallbackRows(table, context, rowData, cellSpacing)
+        : hasStack
+        ? _buildFallback(table, context, rowData, cellSpacing)
         : wrapsInlineCells
         ? _buildInlineCellWrap(
             table,
@@ -372,9 +407,9 @@ class TableHandler extends HtmlElementHandler {
           )
         : naturalFallbackWidth
         ? IntrinsicWidth(
-            child: _buildFallback(table, context, rows, rtl, cellSpacing),
+            child: _buildFallback(table, context, rowData, cellSpacing),
           )
-        : _buildFallback(table, context, rows, rtl, cellSpacing);
+        : _buildFallback(table, context, rowData, cellSpacing);
 
     // A percentage-width table sizes its actual grid to the containing block,
     // not just the decoration painted around it. Without this, an image-only
@@ -393,7 +428,7 @@ class TableHandler extends HtmlElementHandler {
     // The Row-based fallback has no Flutter Table to draw that grid, so its
     // outer box keeps the legacy border and each cell outlines itself.
     var decorated = context.builder.decorate(
-      content,
+      withCaptions(content),
       _boxOnly(context.style, includeBorders: !legacyGrid || !native),
     );
 
@@ -815,7 +850,7 @@ class TableHandler extends HtmlElementHandler {
         for (final cell in row.cells)
           _nativeCell(cell, cellPadding, rowHeight, forcedRowHeight),
       ];
-      final bg = row.ctx.style.backgroundColor;
+      final bg = _rowBackground(row);
       tableRows.add(
         TableRow(
           decoration: bg != null ? BoxDecoration(color: bg) : null,
@@ -893,24 +928,10 @@ class TableHandler extends HtmlElementHandler {
       );
       Widget decorated = context.builder.decorate(
         content,
-        HtmlStyle(
-          padding: style.padding ?? _toEdges(cellPadding),
-          backgroundColor: style.backgroundColor,
-          backgroundImage: style.backgroundImage,
-          backgroundPositionX: style.backgroundPositionX,
-          backgroundPositionY: style.backgroundPositionY,
-          backgroundSize: style.backgroundSize,
-          backgroundPosition: style.backgroundPosition,
-          backgroundRepeat: style.backgroundRepeat,
-          borders: style.borders,
-          borderRadius: style.borderRadius,
-          borderRadiusPercent: style.borderRadiusPercent,
-          borderRadiusGeometry: style.borderRadiusGeometry,
-          overflowHidden: style.overflowHidden,
-        ),
+        _cellBoxStyle(style, cellPadding),
       );
       decorated = _wrapCellLink(decorated, cell.element, cell.ctx);
-      final bg = row.ctx.style.backgroundColor;
+      final bg = _rowBackground(row);
       return bg == null ? decorated : ColoredBox(color: bg, child: decorated);
     }
 
@@ -941,24 +962,10 @@ class TableHandler extends HtmlElementHandler {
     }
     Widget decorated = context.builder.decorate(
       content,
-      HtmlStyle(
-        padding: style.padding ?? _toEdges(cellPadding),
-        backgroundColor: style.backgroundColor,
-        backgroundImage: style.backgroundImage,
-        backgroundPositionX: style.backgroundPositionX,
-        backgroundPositionY: style.backgroundPositionY,
-        backgroundSize: style.backgroundSize,
-        backgroundPosition: style.backgroundPosition,
-        backgroundRepeat: style.backgroundRepeat,
-        borders: style.borders,
-        borderRadius: style.borderRadius,
-        borderRadiusPercent: style.borderRadiusPercent,
-        borderRadiusGeometry: style.borderRadiusGeometry,
-        overflowHidden: style.overflowHidden,
-      ),
+      _cellBoxStyle(style, cellPadding),
     );
     decorated = _wrapCellLink(decorated, cell.element, cell.ctx);
-    final background = row.ctx.style.backgroundColor;
+    final background = _rowBackground(row);
     if (background != null) {
       decorated = ColoredBox(color: background, child: decorated);
     }
@@ -1017,24 +1024,10 @@ class TableHandler extends HtmlElementHandler {
       }
       Widget decorated = context.builder.decorate(
         content,
-        HtmlStyle(
-          padding: style.padding ?? _toEdges(cellPadding),
-          backgroundColor: style.backgroundColor,
-          backgroundImage: style.backgroundImage,
-          backgroundPositionX: style.backgroundPositionX,
-          backgroundPositionY: style.backgroundPositionY,
-          backgroundSize: style.backgroundSize,
-          backgroundPosition: style.backgroundPosition,
-          backgroundRepeat: style.backgroundRepeat,
-          borders: style.borders,
-          borderRadius: style.borderRadius,
-          borderRadiusPercent: style.borderRadiusPercent,
-          borderRadiusGeometry: style.borderRadiusGeometry,
-          overflowHidden: style.overflowHidden,
-        ),
+        _cellBoxStyle(style, cellPadding),
       );
       decorated = _wrapCellLink(decorated, cell.element, cell.ctx);
-      final bg = row.ctx.style.backgroundColor;
+      final bg = _rowBackground(row);
       return bg == null ? decorated : ColoredBox(color: bg, child: decorated);
     }
 
@@ -1106,7 +1099,7 @@ class TableHandler extends HtmlElementHandler {
           for (final cell in row.cells) _inlineBlockCell(cell, defaultPadding),
         ],
       );
-      final background = row.ctx.style.backgroundColor;
+      final background = _rowBackground(row);
       if (background != null) {
         wrapped = ColoredBox(color: background, child: wrapped);
       }
@@ -1181,24 +1174,7 @@ class TableHandler extends HtmlElementHandler {
     }
     Widget decorated = cell.ctx.builder.decorate(
       content,
-      HtmlStyle(
-        // A normal table cell ignores margins. display:inline-block changes
-        // that box model: its margins affect badge spacing and line wrapping.
-        margin: style.display == CssDisplay.inlineBlock ? style.margin : null,
-        padding: style.padding ?? _toEdges(defaultPadding),
-        backgroundColor: style.backgroundColor,
-        backgroundImage: style.backgroundImage,
-        backgroundPositionX: style.backgroundPositionX,
-        backgroundPositionY: style.backgroundPositionY,
-        backgroundSize: style.backgroundSize,
-        backgroundPosition: style.backgroundPosition,
-        backgroundRepeat: style.backgroundRepeat,
-        borders: style.borders,
-        borderRadius: style.borderRadius,
-        borderRadiusPercent: style.borderRadiusPercent,
-        borderRadiusGeometry: style.borderRadiusGeometry,
-        overflowHidden: style.overflowHidden,
-      ),
+      _cellBoxStyle(style, defaultPadding, inlineMargin: true),
     );
     if (forcedMinHeight != null) {
       // The table allocates the whole cell box, including its padding/border;
@@ -1618,8 +1594,7 @@ class TableHandler extends HtmlElementHandler {
   Widget _buildFallback(
     dom.Element table,
     HtmlRenderContext context,
-    List<dom.Element> rows,
-    bool rtl,
+    List<_RowData> rowData,
     ({double h, double v}) cellSpacing,
   ) {
     // Email overlay trick (no position:absolute available): a `rowspan` media
@@ -1627,16 +1602,30 @@ class TableHandler extends HtmlElementHandler {
     // small image (a play icon) that browsers paint on top. Render it as a
     // Stack so the icon sits over the thumbnail instead of dropping to its own
     // row.
+    final rows = [for (final row in rowData) row.ctx.element!];
     final overlay = _buildMediaOverlay(rows, context);
     if (overlay != null) return overlay;
-    if (rows.any(
-      (row) => _cellsOf(row, context).any(
-        (cell) => (int.tryParse(cell.attributes['rowspan'] ?? '1') ?? 1) > 1,
-      ),
-    )) {
-      return _buildSpanningGrid(table, rows, context, cellSpacing);
+    if (!rowData.any(_rowStacks) &&
+        rowData.any(
+          (row) => row.cells.any(
+            (cell) =>
+                cell.rowSpan != 1 ||
+                (row.cells.length > 1 && cell.columnSpan > 1),
+          ),
+        )) {
+      return _buildSpanningGrid(table, rowData, context, cellSpacing);
     }
 
+    return _buildFallbackRows(table, context, rowData, cellSpacing);
+  }
+
+  Widget _buildFallbackRows(
+    dom.Element table,
+    HtmlRenderContext context,
+    List<_RowData> rows,
+    ({double h, double v}) cellSpacing,
+  ) {
+    final rtl = context.style.textDirection == TextDirection.rtl;
     final cellPadding = _cellPaddingFor(table);
     // Share column widths across rows (a width on any cell sizes its whole
     // column) so rows stay aligned even when some cells omit the width.
@@ -1644,13 +1633,17 @@ class TableHandler extends HtmlElementHandler {
     if (rtl) columns = columns.reversed.toList();
 
     final children = <Widget>[];
-    for (final tr in rows) {
+    for (final row in rows) {
+      final tr = row.ctx.element!;
       if (cellSpacing.v > 0 && children.isNotEmpty) {
         children.add(SizedBox(height: cellSpacing.v));
       }
+      final override = context.builder.buildCustomElement(tr, row.ctx);
       children.add(
-        _stacksTr(tr, context)
-            ? _buildStackedRow(tr, context)
+        override != null
+            ? context.builder.flow(override, row.ctx.style)
+            : _rowStacks(row)
+            ? _buildStackedRow(row)
             : _buildRowFallback(
                 tr,
                 context,
@@ -1658,6 +1651,7 @@ class TableHandler extends HtmlElementHandler {
                 rtl,
                 cellSpacing,
                 columns,
+                resolvedRow: row,
               ),
       );
     }
@@ -1767,60 +1761,40 @@ class TableHandler extends HtmlElementHandler {
 
   Widget _buildSpanningGrid(
     dom.Element table,
-    List<dom.Element> rows,
+    List<_RowData> rows,
     HtmlRenderContext context,
     ({double h, double v}) spacing,
   ) {
-    final occupied = <List<bool>>[];
+    final grid = placeSpanningCells([
+      for (final row in rows)
+        (
+          groupEnd: row.groupEnd,
+          cells: [
+            for (final cell in row.cells)
+              (rows: cell.rowSpan, columns: cell.columnSpan),
+          ],
+        ),
+    ]);
+    if (grid == null) return _buildFallbackRows(table, context, rows, spacing);
+    if (grid.columns == 0) return const SizedBox.shrink();
+
     final cells = <Widget>[];
     final columnHints = <int, _ColSpec>{};
-    var columnCount = 0;
+    final cellPadding = _cellPaddingFor(table);
 
-    void ensure(int row, int columns) {
-      while (occupied.length <= row) {
-        occupied.add(<bool>[]);
-      }
-      while (occupied[row].length < columns) {
-        occupied[row].add(false);
-      }
-    }
+    var index = 0;
+    for (final row in rows) {
+      final rowCtx = row.ctx;
+      for (final cell in row.cells) {
+        final element = cell.element;
+        final position = grid.cells[index++];
 
-    for (var rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-      ensure(rowIndex, columnCount);
-      var column = 0;
-      final rowCtx = context.builder.contextForDescendant(
-        rows[rowIndex],
-        context,
-      );
-      for (final element in _cellsOf(rows[rowIndex], context)) {
-        while (column < occupied[rowIndex].length &&
-            occupied[rowIndex][column]) {
-          column++;
-        }
-        final rowSpan =
-            (int.tryParse(element.attributes['rowspan'] ?? '1') ?? 1).clamp(
-              1,
-              rows.length - rowIndex,
-            );
-        final colSpan =
-            (int.tryParse(element.attributes['colspan'] ?? '1') ?? 1).clamp(
-              1,
-              1000,
-            );
-        for (var r = rowIndex; r < rowIndex + rowSpan; r++) {
-          ensure(r, column + colSpan);
-          for (var c = column; c < column + colSpan; c++) {
-            occupied[r][c] = true;
-          }
-        }
-        if (column + colSpan > columnCount) columnCount = column + colSpan;
-
-        final cellCtx = context.builder.contextForDescendant(element, rowCtx);
+        final cellCtx = cell.ctx;
         final style = cellCtx.style;
         // Rowspans change the logical column index of later rows. Collect
         // hints here, after placing each cell, rather than indexing raw cells.
-        if (colSpan == 1) {
-          final hint = columnHints.putIfAbsent(column, _ColSpec.new);
+        if (position.columns == 1) {
+          final hint = columnHints.putIfAbsent(position.column, _ColSpec.new);
           final width = style.width;
           if (width?.unit == CssLengthUnit.percent) {
             if (width!.value > hint.percent) hint.percent = width.value;
@@ -1833,44 +1807,38 @@ class TableHandler extends HtmlElementHandler {
             if (borderBox > hint.px) hint.px = borderBox;
           }
         }
+        Widget content = _alignVertically(
+          _cellContent(element, cellCtx),
+          style.verticalAlign,
+          style.effectiveTextAlign,
+        );
+        final height = _resolveHeightPx(
+          style.height ?? rowCtx.style.height,
+          cellCtx,
+        );
+        if (height != null) {
+          content = ConstrainedBox(
+            constraints: BoxConstraints(minHeight: height),
+            child: content,
+          );
+        }
         final decorated = context.builder.decorate(
-          _alignVertically(
-            _cellContent(element, cellCtx),
-            style.verticalAlign,
-            style.effectiveTextAlign,
-          ),
-          HtmlStyle(
-            padding: style.padding ?? _toEdges(_cellPaddingFor(table)),
-            backgroundColor:
-                style.backgroundColor ?? rowCtx.style.backgroundColor,
-            backgroundImage: style.backgroundImage,
-            backgroundPositionX: style.backgroundPositionX,
-            backgroundPositionY: style.backgroundPositionY,
-            backgroundSize: style.backgroundSize,
-            backgroundPosition: style.backgroundPosition,
-            backgroundRepeat: style.backgroundRepeat,
-            borders: style.borders,
-            borderRadius: style.borderRadius,
-            borderRadiusPercent: style.borderRadiusPercent,
-            borderRadiusGeometry: style.borderRadiusGeometry,
-            overflowHidden: style.overflowHidden,
-            visibilityHidden: style.visibilityHidden,
-          ),
+          content,
+          _cellBoxStyle(style, cellPadding, rowBackground: _rowBackground(row)),
         );
         cells.add(
-          _SpanCell(
-            row: rowIndex,
-            column: column,
-            rowSpan: rowSpan,
-            columnSpan: colSpan,
+          SpanningTableCell(
+            row: position.row,
+            column: position.column,
+            rowSpan: position.rows,
+            columnSpan: position.columns,
             child: _wrapCellLink(decorated, element, cellCtx),
           ),
         );
-        column += colSpan;
       }
     }
 
-    if (columnCount == 0) return const SizedBox.shrink();
+    final columnCount = grid.columns;
     final columnWidths = _colgroupSpecs(table, columnCount, context);
     for (final entry in columnHints.entries) {
       final spec = columnWidths[entry.key];
@@ -1878,25 +1846,31 @@ class TableHandler extends HtmlElementHandler {
         columnWidths[entry.key] = entry.value;
       }
     }
-    return _SpanningTable(
-      textDirection:
-          context.style.textDirection ??
-          Directionality.of(context.buildContext),
-      rows: rows.length,
-      columns: columnCount,
-      columnWidths: columnWidths,
-      horizontalSpacing: spacing.h,
-      verticalSpacing: spacing.v,
-      children: cells,
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: spacing.h, vertical: spacing.v),
+      child: SpanningTable(
+        textDirection:
+            context.style.textDirection ??
+            Directionality.of(context.buildContext),
+        rows: rows.length,
+        columns: columnCount,
+        columnWidths: [
+          for (final spec in columnWidths) (px: spec.px, percent: spec.percent),
+        ],
+        horizontalSpacing: spacing.h,
+        verticalSpacing: spacing.v,
+        children: cells,
+      ),
     );
   }
 
   /// Renders a stacked row, preserving fixed widths on block cells while
   /// filling the row for full-width blocks/inline-blocks.
-  Widget _buildStackedRow(dom.Element tr, HtmlRenderContext context) {
+  Widget _buildStackedRow(_RowData row) {
     final children = <Widget>[];
-    for (final cellEl in _cellsOf(tr, context)) {
-      final cellCtx = context.builder.contextForDescendant(cellEl, context);
+    for (final cell in row.cells) {
+      final cellEl = cell.element;
+      final cellCtx = cell.ctx;
       final style = cellCtx.style;
       Widget content = _cellContent(cellEl, cellCtx);
       if (_fullWidthBlock(style)) {
@@ -1904,7 +1878,7 @@ class TableHandler extends HtmlElementHandler {
       }
       children.add(
         _wrapCellLink(
-          context.builder.decorate(content, style),
+          cellCtx.builder.decorate(content, style),
           cellEl,
           cellCtx,
         ),
@@ -1915,17 +1889,6 @@ class TableHandler extends HtmlElementHandler {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: children,
-    );
-  }
-
-  /// Whether a `<tr>` should stack (≥2 block cells/full-width inline-blocks).
-  bool _stacksTr(dom.Element tr, HtmlRenderContext context) {
-    final cells = _cellsOf(tr, context);
-    if (cells.length < 2) return false;
-    return cells.every(
-      (cellEl) => _stacksCell(
-        context.builder.contextForDescendant(cellEl, context).style,
-      ),
     );
   }
 
@@ -1954,24 +1917,35 @@ class TableHandler extends HtmlElementHandler {
     EdgeInsets cellPadding,
     bool rtl,
     ({double h, double v}) cellSpacing,
-    List<_ColSpec> columns,
-  ) {
-    final rowCtx = context.builder.contextForDescendant(tr, context);
+    List<_ColSpec> columns, {
+    _RowData? resolvedRow,
+  }) {
+    final rowCtx =
+        resolvedRow?.ctx ?? context.builder.contextForDescendant(tr, context);
     final cells = <Widget>[];
     final fixedGutters = <int>{};
     final percentageCells = <int, double>{};
-    var cellEls = _cellsOf(tr, context);
-    if (rtl) cellEls = cellEls.reversed.toList();
-    final singleCellRow = cellEls.length == 1;
+    var rowCells =
+        resolvedRow?.cells ??
+        [
+          for (final element in _cellsOf(tr, context))
+            _CellData(
+              element: element,
+              ctx: context.builder.contextForDescendant(element, rowCtx),
+            ),
+        ];
+    if (rtl) rowCells = rowCells.reversed.toList();
+    final singleCellRow = rowCells.length == 1;
     final legacyCellBorder = _legacyCellBorder(context);
     var hasFlexible = false;
-    for (var i = 0; i < cellEls.length; i++) {
-      final cellEl = cellEls[i];
+    for (var i = 0; i < rowCells.length; i++) {
+      final cell = rowCells[i];
+      final cellEl = cell.element;
       if (cellSpacing.h > 0 && cells.isNotEmpty) {
         fixedGutters.add(cells.length);
         cells.add(SizedBox(width: cellSpacing.h));
       }
-      final cellCtx = context.builder.contextForDescendant(cellEl, rowCtx);
+      final cellCtx = cell.ctx;
       final style = cellCtx.style;
       Widget content = SizedBox(
         width: double.infinity,
@@ -2003,24 +1977,10 @@ class TableHandler extends HtmlElementHandler {
       }
       final decorated = context.builder.decorate(
         content,
-        HtmlStyle(
-          padding: style.padding ?? _toEdges(cellPadding),
-          backgroundColor: style.backgroundColor,
-          backgroundImage: style.backgroundImage,
-          backgroundPositionX: style.backgroundPositionX,
-          backgroundPositionY: style.backgroundPositionY,
-          backgroundSize: style.backgroundSize,
-          backgroundPosition: style.backgroundPosition,
-          backgroundRepeat: style.backgroundRepeat,
-          borders: style.borders ?? legacyCellBorder,
-          borderRadius: style.borderRadius,
-          borderRadiusPercent: style.borderRadiusPercent,
-          borderRadiusGeometry: style.borderRadiusGeometry,
-          overflowHidden: style.overflowHidden,
-        ),
+        _cellBoxStyle(style, cellPadding, defaultBorders: legacyCellBorder),
       );
-      final colspan = int.tryParse(cellEl.attributes['colspan'] ?? '1') ?? 1;
-      final rowspan = int.tryParse(cellEl.attributes['rowspan'] ?? '1') ?? 1;
+      final colspan = cell.columnSpan;
+      final rowspan = cell.rowSpan;
       // A spanning cell covers multiple columns; a single shared-column spec
       // would incorrectly shrink it to just the first column. Let the fallback
       // flex it across the row instead.
@@ -2224,20 +2184,16 @@ class TableHandler extends HtmlElementHandler {
   /// when the table is ragged or uses col/rowspan (then cells size themselves).
   List<_ColSpec> _sharedColumnSpecs(
     dom.Element table,
-    List<dom.Element> rows,
+    List<_RowData> rows,
     HtmlRenderContext context,
   ) {
-    final regularRows = <List<dom.Element>>[];
-    for (final tr in rows) {
-      final cells = _cellsOf(tr, context);
+    final regularRows = <List<_CellData>>[];
+    for (final row in rows) {
+      final cells = row.cells;
       // A spanning row (commonly an empty full-width spacer) does not describe
       // the ordinary column grid. Ignore it when deriving shared widths instead
       // of making every non-spanning cell independently flexible.
-      final hasSpan = cells.any(
-        (c) =>
-            (int.tryParse(c.attributes['colspan'] ?? '1') ?? 1) != 1 ||
-            (int.tryParse(c.attributes['rowspan'] ?? '1') ?? 1) != 1,
-      );
+      final hasSpan = cells.any((cell) => cell.hasSpan);
       if (!hasSpan && cells.isNotEmpty) regularRows.add(cells);
     }
     if (regularRows.isEmpty) return const [];
@@ -2249,8 +2205,7 @@ class TableHandler extends HtmlElementHandler {
     final specs = _colgroupSpecs(table, columns, context);
     for (var j = 0; j < columns; j++) {
       specs[j].intrinsic = regularRows.every((cells) {
-        final cellCtx = context.builder.contextForDescendant(cells[j], context);
-        final facts = _CellContentFacts.inspect(cells[j], cellCtx);
+        final facts = cells[j].content;
         return facts.onlyImages &&
             !facts.hasFillImage &&
             !facts.hasPercentImage;
@@ -2258,7 +2213,7 @@ class TableHandler extends HtmlElementHandler {
     }
     for (final cs in regularRows) {
       for (var j = 0; j < cs.length; j++) {
-        final cellCtx = context.builder.contextForDescendant(cs[j], context);
+        final cellCtx = cs[j].ctx;
         final style = cellCtx.style;
         final w = style.width;
         if (w == null || w.isAuto) continue;
@@ -2347,13 +2302,29 @@ class TableHandler extends HtmlElementHandler {
   /// this the dead padding ring around the icon swallows taps.
   Widget _wrapCellLink(Widget child, dom.Element cell, HtmlRenderContext ctx) {
     final onTap = ctx.config.onLinkTap;
-    if (onTap == null) return child;
+    if (onTap == null ||
+        ctx.style.visibilityHidden == true ||
+        ctx.style.pointerEventsNone == true) {
+      return child;
+    }
     final links = [
       for (final a in cell.getElementsByTagName('a'))
         if ((a.attributes['href'] ?? '').trim().isNotEmpty) a,
     ];
     if (links.length != 1) return child;
     final link = links.first;
+    for (
+      dom.Element? node = link;
+      node != null && node != cell;
+      node = node.parent
+    ) {
+      final style = ctx.builder.contextForDescendant(node, ctx).style;
+      if (style.display == CssDisplay.none ||
+          style.visibilityHidden == true ||
+          style.pointerEventsNone == true) {
+        return child;
+      }
+    }
     // All of the cell's text must live inside that link (an image-only icon has
     // none; a text button's label matches) — otherwise the cell mixes the link
     // with other content and the whole box shouldn't navigate.
@@ -2445,6 +2416,11 @@ class TableHandler extends HtmlElementHandler {
     HtmlRenderContext cellCtx, {
     bool shrinkWrap = false,
   }) {
+    final custom = cellCtx.builder.buildCustomElement(cell, cellCtx);
+    if (custom != null) {
+      final content = cellCtx.builder.flow(custom, cellCtx.style);
+      return shrinkWrap ? IntrinsicWidth(child: content) : content;
+    }
     if (cellCtx.style.overflowHidden == true &&
         cellCtx.style.textOverflow == 'ellipsis') {
       final meaningful = cell.nodes
@@ -2459,7 +2435,9 @@ class TableHandler extends HtmlElementHandler {
           child,
           cellCtx.childInherited,
         );
-        if (childCtx.style.display == CssDisplay.inline &&
+        if (child.localName == 'span' &&
+            !cellCtx.builder.hasCustomElementHandler('span') &&
+            childCtx.style.display == CssDisplay.inline &&
             childCtx.style.preventsWrapping) {
           // Keep the inline text in this paragraph so ellipsis can remove glyphs,
           // rather than treating the entire nowrap span as one atomic widget.
@@ -2775,6 +2753,38 @@ class TableHandler extends HtmlElementHandler {
 
   /// Builds the outer table box. CSS borders live here (outside padding), while
   /// legacy HTML `border` stays on [Table] because it also draws the cell grid.
+  static Color? _rowBackground(_RowData row) =>
+      row.ctx.style.visibilityHidden == true
+      ? null
+      : row.ctx.style.backgroundColor;
+
+  HtmlStyle _cellBoxStyle(
+    HtmlStyle style,
+    EdgeInsets padding, {
+    CssBorders? defaultBorders,
+    Color? rowBackground,
+    bool inlineMargin = false,
+  }) => HtmlStyle(
+    margin: inlineMargin && style.display == CssDisplay.inlineBlock
+        ? style.margin
+        : null,
+    padding: style.padding ?? _toEdges(padding),
+    backgroundColor: style.backgroundColor ?? rowBackground,
+    backgroundImage: style.backgroundImage,
+    backgroundPositionX: style.backgroundPositionX,
+    backgroundPositionY: style.backgroundPositionY,
+    backgroundSize: style.backgroundSize,
+    backgroundPosition: style.backgroundPosition,
+    backgroundRepeat: style.backgroundRepeat,
+    borders: style.borders ?? defaultBorders,
+    borderRadius: style.borderRadius,
+    borderRadiusPercent: style.borderRadiusPercent,
+    borderRadiusGeometry: style.borderRadiusGeometry,
+    overflowHidden: style.overflowHidden,
+    visibilityHidden: style.visibilityHidden,
+    opacity: style.opacity,
+  );
+
   HtmlStyle _boxOnly(HtmlStyle style, {required bool includeBorders}) =>
       HtmlStyle(
         margin: style.margin,
@@ -2790,6 +2800,8 @@ class TableHandler extends HtmlElementHandler {
         borderRadiusPercent: style.borderRadiusPercent,
         borderRadiusGeometry: style.borderRadiusGeometry,
         overflowHidden: style.overflowHidden,
+        visibilityHidden: style.visibilityHidden,
+        opacity: style.opacity,
         borders: includeBorders ? _emailTableBorders(style.borders) : null,
         // `width` is applied by _buildTable as a min-width floor (a CSS table
         // grows past its width to fit content), not a hard width here.
@@ -2915,309 +2927,6 @@ class _RenderTablePercentMinWidth extends RenderProxyBox {
 /// fixed-width text panel balloon to fill a wide viewport, this keeps such a
 /// panel at its set width and wraps its text — matching how a browser sizes a
 /// `width:Npx` table — while a small icon cell still expands to fit its image.
-class _SpanCell extends ParentDataWidget<_SpanningTableParentData> {
-  const _SpanCell({
-    required this.row,
-    required this.column,
-    required this.rowSpan,
-    required this.columnSpan,
-    required super.child,
-  });
-
-  final int row;
-  final int column;
-  final int rowSpan;
-  final int columnSpan;
-
-  @override
-  void applyParentData(RenderObject renderObject) {
-    final data = renderObject.parentData! as _SpanningTableParentData;
-    if (data.row == row &&
-        data.column == column &&
-        data.rowSpan == rowSpan &&
-        data.columnSpan == columnSpan) {
-      return;
-    }
-    data
-      ..row = row
-      ..column = column
-      ..rowSpan = rowSpan
-      ..columnSpan = columnSpan;
-    renderObject.parent?.markNeedsLayout();
-  }
-
-  @override
-  Type get debugTypicalAncestorWidgetClass => _SpanningTable;
-}
-
-class _SpanningTable extends MultiChildRenderObjectWidget {
-  const _SpanningTable({
-    required this.textDirection,
-    required this.rows,
-    required this.columns,
-    required this.columnWidths,
-    required this.horizontalSpacing,
-    required this.verticalSpacing,
-    required super.children,
-  });
-
-  final int rows;
-  final TextDirection textDirection;
-  final int columns;
-  final List<_ColSpec> columnWidths;
-  final double horizontalSpacing;
-  final double verticalSpacing;
-
-  @override
-  RenderObject createRenderObject(BuildContext context) => _RenderSpanningTable(
-    rows,
-    columns,
-    columnWidths,
-    horizontalSpacing,
-    verticalSpacing,
-    textDirection,
-  );
-
-  @override
-  void updateRenderObject(
-    BuildContext context,
-    covariant _RenderSpanningTable renderObject,
-  ) {
-    renderObject
-      ..rows = rows
-      ..columns = columns
-      ..columnWidths = columnWidths
-      ..horizontalSpacing = horizontalSpacing
-      ..verticalSpacing = verticalSpacing;
-    renderObject.textDirection = textDirection;
-  }
-}
-
-class _SpanningTableParentData extends ContainerBoxParentData<RenderBox> {
-  int row = 0;
-  int column = 0;
-  int rowSpan = 1;
-  int columnSpan = 1;
-}
-
-class _RenderSpanningTable extends RenderBox
-    with
-        ContainerRenderObjectMixin<RenderBox, _SpanningTableParentData>,
-        RenderBoxContainerDefaultsMixin<RenderBox, _SpanningTableParentData> {
-  _RenderSpanningTable(
-    this._rows,
-    this._columns,
-    this._columnWidths,
-    this._horizontalSpacing,
-    this._verticalSpacing,
-    this._textDirection,
-  );
-
-  int _rows;
-  int _columns;
-  List<_ColSpec> _columnWidths;
-  double _horizontalSpacing;
-  double _verticalSpacing;
-  TextDirection _textDirection;
-
-  set textDirection(TextDirection value) {
-    if (_textDirection == value) return;
-    _textDirection = value;
-    markNeedsLayout();
-  }
-
-  set rows(int value) {
-    if (_rows == value) return;
-    _rows = value;
-    markNeedsLayout();
-  }
-
-  set columns(int value) {
-    if (_columns == value) return;
-    _columns = value;
-    markNeedsLayout();
-  }
-
-  set columnWidths(List<_ColSpec> value) {
-    if (identical(_columnWidths, value)) return;
-    _columnWidths = value;
-    markNeedsLayout();
-  }
-
-  set horizontalSpacing(double value) {
-    if (_horizontalSpacing == value) return;
-    _horizontalSpacing = value;
-    markNeedsLayout();
-  }
-
-  set verticalSpacing(double value) {
-    if (_verticalSpacing == value) return;
-    _verticalSpacing = value;
-    markNeedsLayout();
-  }
-
-  @override
-  void setupParentData(RenderBox child) {
-    if (child.parentData is! _SpanningTableParentData) {
-      child.parentData = _SpanningTableParentData();
-    }
-  }
-
-  double _availableWidth(BoxConstraints constraints) {
-    if (constraints.maxWidth.isFinite) return constraints.maxWidth;
-    return computeMaxIntrinsicWidth(double.infinity);
-  }
-
-  double _intrinsicWidth(bool minimum) {
-    final widths = [for (final spec in _columnWidths) spec.px];
-    RenderBox? child = firstChild;
-    while (child != null) {
-      final data = child.parentData! as _SpanningTableParentData;
-      final value = minimum
-          ? child.getMinIntrinsicWidth(double.infinity)
-          : child.getMaxIntrinsicWidth(double.infinity);
-      final share =
-          (value - _horizontalSpacing * (data.columnSpan - 1)) /
-          data.columnSpan;
-      for (var c = data.column; c < data.column + data.columnSpan; c++) {
-        if (share > widths[c]) widths[c] = share;
-      }
-      child = data.nextSibling;
-    }
-    return widths.fold<double>(0, (sum, width) => sum + width) +
-        _horizontalSpacing * (_columns - 1);
-  }
-
-  @override
-  double computeMinIntrinsicWidth(double height) => _intrinsicWidth(true);
-
-  @override
-  double computeMaxIntrinsicWidth(double height) => _intrinsicWidth(false);
-
-  List<double> _resolvedColumnWidths(double width) {
-    final available = (width - _horizontalSpacing * (_columns - 1)).clamp(
-      0.0,
-      double.infinity,
-    );
-    final widths = [
-      for (final spec in _columnWidths)
-        spec.px > 0 ? spec.px : available * spec.percent / 100,
-    ];
-    final total = widths.fold<double>(0, (sum, value) => sum + value);
-    final auto = _columnWidths
-        .where((spec) => spec.px == 0 && spec.percent == 0)
-        .length;
-    if (total > available || (auto == 0 && total > 0)) {
-      final scale = available / total;
-      for (var c = 0; c < _columns; c++) {
-        widths[c] *= scale;
-      }
-    } else if (auto > 0) {
-      final share = (available - total) / auto;
-      for (var c = 0; c < _columns; c++) {
-        if (_columnWidths[c].px == 0 && _columnWidths[c].percent == 0) {
-          widths[c] = share;
-        }
-      }
-    }
-    return widths;
-  }
-
-  double _spanWidth(_SpanningTableParentData data, List<double> widths) {
-    var width = _horizontalSpacing * (data.columnSpan - 1);
-    for (var c = data.column; c < data.column + data.columnSpan; c++) {
-      width += widths[c];
-    }
-    return width;
-  }
-
-  @override
-  void performLayout() {
-    if (_rows <= 0 || _columns <= 0 || firstChild == null) {
-      size = constraints.smallest;
-      return;
-    }
-    final width = _availableWidth(
-      constraints,
-    ).clamp(constraints.minWidth, constraints.maxWidth);
-    final columnWidths = _resolvedColumnWidths(width);
-    final columnOffsets = List<double>.filled(_columns, 0);
-    for (var c = 1; c < _columns; c++) {
-      columnOffsets[c] =
-          columnOffsets[c - 1] + columnWidths[c - 1] + _horizontalSpacing;
-    }
-    final rowHeights = List<double>.filled(_rows, 0);
-
-    RenderBox? child = firstChild;
-    while (child != null) {
-      final data = child.parentData! as _SpanningTableParentData;
-      final spanWidth = _spanWidth(data, columnWidths);
-      child.layout(BoxConstraints(maxWidth: spanWidth), parentUsesSize: true);
-      if (data.rowSpan == 1 && child.size.height > rowHeights[data.row]) {
-        rowHeights[data.row] = child.size.height;
-      }
-      child = data.nextSibling;
-    }
-
-    child = firstChild;
-    while (child != null) {
-      final data = child.parentData! as _SpanningTableParentData;
-      if (data.rowSpan > 1) {
-        var current = _verticalSpacing * (data.rowSpan - 1);
-        for (var r = data.row; r < data.row + data.rowSpan; r++) {
-          current += rowHeights[r];
-        }
-        final missing = child.size.height - current;
-        if (missing > 0) {
-          final share = missing / data.rowSpan;
-          for (var r = data.row; r < data.row + data.rowSpan; r++) {
-            rowHeights[r] += share;
-          }
-        }
-      }
-      child = data.nextSibling;
-    }
-
-    final rowOffsets = List<double>.filled(_rows, 0);
-    for (var r = 1; r < _rows; r++) {
-      rowOffsets[r] = rowOffsets[r - 1] + rowHeights[r - 1] + _verticalSpacing;
-    }
-
-    child = firstChild;
-    while (child != null) {
-      final data = child.parentData! as _SpanningTableParentData;
-      final spanWidth = _spanWidth(data, columnWidths);
-      var spanHeight = _verticalSpacing * (data.rowSpan - 1);
-      for (var r = data.row; r < data.row + data.rowSpan; r++) {
-        spanHeight += rowHeights[r];
-      }
-      child.layout(
-        BoxConstraints.tightFor(width: spanWidth, height: spanHeight),
-        parentUsesSize: true,
-      );
-      final x = columnOffsets[data.column];
-      data.offset = Offset(
-        _textDirection == TextDirection.rtl ? width - x - spanWidth : x,
-        rowOffsets[data.row],
-      );
-      child = data.nextSibling;
-    }
-
-    final height =
-        rowHeights.fold<double>(0, (sum, value) => sum + value) +
-        _verticalSpacing * (_rows - 1);
-    size = constraints.constrain(Size(width, height));
-  }
-
-  @override
-  void paint(PaintingContext context, Offset offset) =>
-      defaultPaint(context, offset);
-
-  @override
-  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) =>
-      defaultHitTestChildren(result, position: position);
-}
-
 /// Replaced images contribute their preferred (possibly max-width capped)
 /// width before an adjacent text column is shrunk. Their render boxes report
 /// a zero min-intrinsic width to permit responsive scaling elsewhere.
@@ -3369,6 +3078,7 @@ class _RowData {
   _RowData(this.ctx, this.cells);
   final HtmlRenderContext ctx;
   final List<_CellData> cells;
+  late int groupEnd;
 }
 
 class _CellData {
@@ -3380,11 +3090,11 @@ class _CellData {
     ctx,
   );
 
-  bool get hasSpan {
-    final colspan = int.tryParse(element.attributes['colspan'] ?? '1') ?? 1;
-    final rowspan = int.tryParse(element.attributes['rowspan'] ?? '1') ?? 1;
-    return colspan > 1 || rowspan > 1;
-  }
+  late final int columnSpan =
+      (int.tryParse(element.attributes['colspan'] ?? '') ?? 1).clamp(1, 1000);
+  late final int rowSpan =
+      (int.tryParse(element.attributes['rowspan'] ?? '') ?? 1).clamp(0, 65534);
+  bool get hasSpan => columnSpan > 1 || rowSpan != 1;
 }
 
 /// All column classification facts from one traversal of the visible subtree.

@@ -3,6 +3,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:html/dom.dart' show Node;
 
 void main() {
+  test('cleans event attributes on the rendered root and its HTML ancestor', () {
+    final root = HtmlEmailParser()
+        .parse(
+          '<html onload="ignored"><body onload="ignored"><p>Text</p></body></html>',
+        )
+        .root;
+    expect(root.attributes.containsKey('onload'), isFalse);
+    expect(root.parent!.attributes.containsKey('onload'), isFalse);
+    expect(root.text, 'Text');
+  });
   final parser = HtmlEmailParser();
 
   test('removes script elements', () {

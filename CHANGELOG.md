@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Share column geometry across partial table spans and measure nested rowspan
+  tables before laying out their containing row. Render captions and apply
+  custom row and cell handlers inside tables.
+- Preserve CSS declaration fallbacks and shorthand priority, honor style media
+  conditions and HTML direction, and keep auto-link targets intact when their
+  visible text is transformed.
+- Clear old CSS backgrounds when the image changes, keep failed images from
+  interrupting rendering, pause initially hidden animations, and clamp zoom
+  panning when the viewport shrinks.
+- Bound native remote image downloads and total selector work, and apply the
+  prepared document's image policy consistently. Improve MIME and Android file
+  import in the example app.
+
 - Resolve percentage border radii against the rendered box size, including
   container-clipped avatars, backgrounds and table cells. Preserve rounded
   overflow clipping when the wrapper has no background or border.

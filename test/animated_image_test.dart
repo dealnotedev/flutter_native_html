@@ -7,6 +7,36 @@ import 'package:flutter_native_html/flutter_native_html.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('an initially offstage animation pauses and resumes when shown', (
+    tester,
+  ) async {
+    final image = _TestImageProvider();
+    Future<void> pump(bool offstage) => tester.pumpWidget(
+      MaterialApp(
+        home: Offstage(
+          offstage: offstage,
+          child: HtmlEmailView(
+            html: '<img src="cid:animation" width="20" height="20">',
+            config: HtmlRenderConfig(
+              imageResolver: _Images(image),
+              pauseOffscreenImageAnimations: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await pump(true);
+    for (var i = 0; i < 2; i++) {
+      image.stream.emitFrame();
+      await tester.pump();
+    }
+    await tester.pump();
+    expect(image.stream.listening, isFalse);
+    await pump(false);
+    await tester.pumpAndSettle();
+    expect(image.stream.listening, isTrue);
+  });
+
   testWidgets(
     'offscreen frames pause and visible frames only repaint the image',
     (tester) async {

@@ -2,6 +2,7 @@ package tech.plink.flutter_html
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -61,16 +62,19 @@ class MainActivity : FlutterActivity() {
 
     /** Returns `{name, bytes}` for an openable file in [intent], or null. */
     private fun readIntent(intent: Intent?): Map<String, Any>? {
-        if (intent == null) return null
-        val uri: Uri? = when (intent.action) {
-            Intent.ACTION_SEND -> {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_STREAM)
-            }
-            else -> intent.data // ACTION_VIEW and friends
-        }
-        if (uri == null) return null
         return try {
+            if (intent == null) return null
+            val uri = when (intent.action) {
+                Intent.ACTION_SEND -> if (Build.VERSION.SDK_INT >= 33) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<android.os.Parcelable>(Intent.EXTRA_STREAM) as? Uri
+                }
+                Intent.ACTION_VIEW -> intent.data
+                else -> null
+            } ?: return null
+            if (uri.scheme != "content" && uri.scheme != "file") return null
             val (name, size) = fileInfo(uri)
             if (size != null && size > maxInputBytes) throw EmailInputTooLarge()
             val bytes = contentResolver.openInputStream(uri)?.use {

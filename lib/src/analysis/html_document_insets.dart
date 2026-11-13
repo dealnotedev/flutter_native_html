@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:html/dom.dart' as dom;
 
 import '../config/html_render_config.dart';
+import '../css/css_selector.dart';
 import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
@@ -81,9 +82,9 @@ HtmlDocumentInsetsEstimate estimateHtmlDocumentInsets(
     textDirection: textDirection,
     color: config.defaultColor,
   );
-  return _Estimator(
-    config,
-    StyleResolver(
+  try {
+    final matches = CssMatchContext();
+    final resolver = StyleResolver(
       stylesheet: document.stylesheet,
       rootStyle: rootStyle,
       availableWidth: availableWidth,
@@ -92,9 +93,20 @@ HtmlDocumentInsetsEstimate estimateHtmlDocumentInsets(
         width: availableWidth,
         config: config,
         brightness: brightness,
+        matchContext: matches,
       ).brightness,
-    ),
-  ).element(document.root, rootStyle, availableWidth).estimate;
+      matchContext: matches,
+    );
+    final parent = resolver.documentParentStyle(document.root);
+    return parent.display == CssDisplay.none
+        ? const _Content.empty().estimate
+        : _Estimator(
+            config,
+            resolver,
+          ).element(document.root, parent, availableWidth).estimate;
+  } on CssMatchLimitException {
+    return const _Content.unknown().estimate;
+  }
 }
 
 class _Content {

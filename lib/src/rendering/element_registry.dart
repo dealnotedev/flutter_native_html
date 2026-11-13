@@ -15,7 +15,12 @@ import 'handlers/table_handler.dart';
 /// `div`, `p`, `span`, headings, `b/i/u`, `blockquote`, `pre`, …).
 class ElementRegistry {
   ElementRegistry({List<HtmlElementHandler> custom = const []}) {
-    for (final handler in [...custom, ..._builtIns]) {
+    for (final handler in custom) {
+      for (final tag in handler.tags) {
+        _custom.putIfAbsent(tag.toLowerCase(), () => handler);
+      }
+    }
+    for (final handler in _builtIns) {
       for (final tag in handler.tags) {
         _handlers.putIfAbsent(tag, () => handler);
       }
@@ -23,6 +28,7 @@ class ElementRegistry {
   }
 
   final Map<String, HtmlElementHandler> _handlers = {};
+  final Map<String, HtmlElementHandler> _custom = {};
 
   static final List<HtmlElementHandler> _builtIns = [
     const AnchorHandler(),
@@ -34,5 +40,9 @@ class ElementRegistry {
     const SubSupHandler(),
   ];
 
-  HtmlElementHandler? handlerFor(String tag) => _handlers[tag.toLowerCase()];
+  HtmlElementHandler? customHandlerFor(String tag) =>
+      _custom[tag.toLowerCase()];
+
+  HtmlElementHandler? handlerFor(String tag) =>
+      customHandlerFor(tag) ?? _handlers[tag.toLowerCase()];
 }

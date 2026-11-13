@@ -1,5 +1,7 @@
+import 'dart:math' as math;
 import 'dart:ui' show Brightness;
 
+import 'css_declaration_mapper.dart';
 import 'css_selector.dart';
 import 'css_stylesheet.dart';
 import 'css_declaration_expander.dart';
@@ -19,11 +21,25 @@ class CssParser {
   const CssParser._();
 
   /// Parses the concatenated text of all `<style>` blocks into a stylesheet.
-  static CssStylesheet parseStylesheet(String css) {
-    final clean = _stripComments(css);
+  static CssStylesheet parseStylesheet(String css) =>
+      parseStyleBlocks([(css, null)]);
+
+  static CssStylesheet parseStyleBlocks(
+    Iterable<(String, String?)> blocks, {
+    int? maxRules,
+  }) {
     final rules = <CssRule>[];
     final order = _Counter();
-    _parseRules(clean, rules, order, null);
+    for (final (css, media) in blocks) {
+      _parseRules(
+        _stripComments(css),
+        rules,
+        order,
+        media == null || media.trim().isEmpty ? null : _parseMedia(media),
+        maxRules: maxRules,
+      );
+      if (maxRules != null && rules.length > maxRules) break;
+    }
     return CssStylesheet(rules);
   }
 
@@ -33,9 +49,10 @@ class CssParser {
     String css,
     List<CssRule> rules,
     _Counter order,
-    CssMediaQuery? media, [
+    CssMediaQuery? media, {
     int depth = 0,
-  ]) {
+    int? maxRules,
+  }) {
     if (depth >= 32) return;
     var i = 0;
     while (i < css.length) {
@@ -63,8 +80,10 @@ class CssParser {
             rules,
             order,
             media?.and(condition) ?? condition,
-            depth + 1,
+            depth: depth + 1,
+            maxRules: maxRules,
           );
+          if (maxRules != null && rules.length > maxRules) return;
         }
         // Other at-rules (@font-face, @supports, @keyframes, …) are skipped.
         i = braceClose + 1;
@@ -84,6 +103,7 @@ class CssParser {
                 media: media,
               ),
             );
+            if (maxRules != null && rules.length > maxRules) return;
           }
         }
       }
@@ -142,18 +162,16 @@ class CssParser {
         continue;
       }
       var value = double.tryParse(m.group(2)!);
-      if (value == null) {
-        applicable = false;
-      } else {
+      if (value != null) {
         final unit = m.group(3)!.toLowerCase();
         if (unit == 'em' || unit == 'rem') value *= 16;
       }
-      if (value == null) {
+      if (value == null || !value.isFinite) {
         applicable = false;
       } else if (m.group(1)!.toLowerCase().startsWith('max')) {
-        maxWidth = value;
+        maxWidth = math.min(maxWidth ?? double.infinity, value);
       } else {
-        minWidth = value;
+        minWidth = math.max(minWidth ?? 0, value);
       }
     }
     return CssMediaClause(
@@ -179,6 +197,7 @@ class CssParser {
   static CssDecls parseInlineDeclarations(String text) {
     final values = <String, String>{};
     final important = <String>{};
+    final pending = <String, String>{};
     for (final part in _splitDeclarations(text)) {
       final colon = part.indexOf(':');
       if (colon <= 0) continue;
@@ -202,16 +221,30 @@ class CssParser {
       // Within one block, `!important` beats a later normal declaration of the
       // same property regardless of source order (`color:red!important;
       // color:blue` stays red), matching the cascade.
-      for (final entry in CssDeclarationExpander.expand(prop, value).entries) {
+      final longhands = CssDeclarationMapper.shorthandLonghands[prop];
+      final deferred = longhands != null && value.contains('var(');
+      final declarations = deferred
+          ? {for (final longhand in longhands) longhand: value}
+          : longhands != null
+          ? CssDeclarationMapper.expandShorthand(prop, value) ??
+                const <String, String>{}
+          : CssDeclarationExpander.expand(prop, value);
+      for (final entry in declarations.entries) {
+        if (!CssDeclarationMapper.accepts(entry.key, entry.value)) continue;
         if (!hadImportant && important.contains(entry.key)) continue;
         // Reinsertion also preserves order for overlapping supported properties
         // that haven't been expanded (for example font and font-size).
         values.remove(entry.key);
         values[entry.key] = entry.value;
+        if (deferred) {
+          pending[entry.key] = prop;
+        } else {
+          pending.remove(entry.key);
+        }
         if (hadImportant) important.add(entry.key);
       }
     }
-    return CssDecls(values, important);
+    return CssDecls(values, important, pending);
   }
 
   static final RegExp _importantPattern = RegExp(

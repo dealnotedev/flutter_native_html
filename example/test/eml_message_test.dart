@@ -7,6 +7,46 @@ import 'package:flutter_test/flutter_test.dart';
 Uint8List _bytes(String s) => Uint8List.fromList(latin1.encode(s));
 
 void main() {
+  test(
+    'multipart/related uses the designated root rather than another HTML part',
+    () {
+      final message = EmlMessage.parse(
+        _bytes(
+          [
+            'Content-Type: multipart/related; boundary="parts"; type="text/html"; start="<body@example.test>"',
+            '',
+            '--parts',
+            'Content-Type: text/html',
+            'Content-ID: <other@example.test>',
+            '',
+            '<p>Other resource</p>',
+            '--parts',
+            'Content-Type: text/html',
+            'Content-ID: <body@example.test>',
+            '',
+            '<p>Message body</p>',
+            '--parts--',
+          ].join('\r\n'),
+        ),
+      );
+      expect(message.html, '<p>Message body</p>');
+    },
+  );
+
+  test(
+    'a filename with attachment in it does not change inline disposition',
+    () {
+      final message = EmlMessage.parse(
+        _bytes(
+          'Content-Type: text/plain\r\n'
+          'Content-Disposition: inline; filename="attachment-notes.txt"\r\n'
+          '\r\nMessage body',
+        ),
+      );
+      expect(message.text, 'Message body');
+    },
+  );
+
   test('malformed MIME base64 does not throw and encoded subject decodes', () {
     final raw = Uint8List.fromList(
       'Subject: =?UTF-8?B?0KLQtdGB0YI=?=\r\n'

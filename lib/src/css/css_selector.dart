@@ -73,7 +73,8 @@ class CssCompoundSelector {
   final String? nthChild;
   final CssCompoundSelector? not;
 
-  bool matches(dom.Element element) {
+  bool matches(dom.Element element, [CssMatchContext? context]) {
+    context?.visit();
     if (root && element.parent != null) return false;
     if (tag != null && tag != '*') {
       if ((element.localName ?? '').toLowerCase() != tag) return false;
@@ -103,10 +104,10 @@ class CssCompoundSelector {
     }
     if (nthChild != null) {
       if (siblings == null) return false;
-      final index = siblings.indexOf(element) + 1;
+      final index = context?.position(element) ?? siblings.indexOf(element) + 1;
       if (!_matchesNth(nthChild!, index)) return false;
     }
-    if (not?.matches(element) ?? false) return false;
+    if (not?.matches(element, context) ?? false) return false;
     return true;
   }
 
@@ -194,10 +195,10 @@ class CssSelector {
 
   /// Tests whether [element] matches this selector, walking ancestors for
   /// descendant/child combinators (matched right-to-left, like browsers).
-  bool matches(dom.Element element) {
+  bool matches(dom.Element element, [CssMatchContext? context]) {
     if (_items.isEmpty) return false;
     final last = _items.length - 1;
-    if (!_items[last].compound.matches(element)) return false;
+    if (!_items[last].compound.matches(element, context)) return false;
     // Keep every viable ancestor/sibling, not only the nearest match. A later
     // child combinator can reject the nearest while an earlier one succeeds.
     // Deduplicate each frontier and shared walks to avoid exponential paths
@@ -215,13 +216,14 @@ class CssSelector {
           combo == CssCombinator.child ||
           combo == CssCombinator.adjacentSibling;
       for (final candidate in candidates) {
-        var node = sibling
-            ? candidate.previousElementSibling
-            : candidate.parent;
+        dom.Element? previous(dom.Element element) => context == null
+            ? element.previousElementSibling
+            : context.previous(element);
+        var node = sibling ? previous(candidate) : candidate.parent;
         while (node != null && visited.add(node)) {
-          if (comp.matches(node)) next.add(node);
+          if (comp.matches(node, context)) next.add(node);
           if (single) break;
-          node = sibling ? node.previousElementSibling : node.parent;
+          node = sibling ? previous(node) : node.parent;
         }
       }
       if (next.isEmpty) return false;
@@ -230,7 +232,9 @@ class CssSelector {
     return true;
   }
 
-  (int, int, int) get specificity {
+  late final (int, int, int) specificity = _computeSpecificity();
+
+  (int, int, int) _computeSpecificity() {
     var ids = 0, classes = 0, types = 0;
     for (final item in _items) {
       final s = item.compound.specificity;
@@ -285,7 +289,8 @@ class CssSelector {
     // tag/.class/#id text.
     final attrs = <CssAttrSelector>[];
     var failed = false;
-    var rest = token.replaceAllMapped(_attrBlock, (m) {
+    var rest = token.replaceAllMapped(_compoundArguments, (m) {
+      if (m.group(1) == null) return m.group(0)!;
       final attr = _parseAttr(m.group(1)!);
       if (attr == null) {
         failed = true;
@@ -328,7 +333,9 @@ class CssSelector {
           nthChild = argument;
         }
       } else if (name == 'not') {
-        if (argument == null || argument.contains(':')) {
+        if (argument == null ||
+            argument.isEmpty ||
+            _tokenize(argument).length != 1) {
           failed = true;
         } else {
           not = _parseCompound(argument.trim());
@@ -390,9 +397,13 @@ class CssSelector {
     );
   }
 
-  static final RegExp _attrBlock = RegExp(r'\[([^\]]*)\]');
+  // Consume functional pseudos as a unit so their attribute predicates stay
+  // in the argument rather than attaching to the enclosing compound.
+  static final RegExp _compoundArguments = RegExp(
+    r'''\[((?:"[^"]*"|'[^']*'|[^\]"'])*)\]|\((?:"[^"]*"|'[^']*'|[^()'"])*\)''',
+  );
   static final RegExp _pseudoPattern = RegExp(
-    r':(first-child|last-child|nth-child|not|link|root)(?![\w-])(?:\(([^()]*)\))?',
+    r''':(first-child|last-child|nth-child|not|link|root)(?![\w-])(?:\(((?:"[^"]*"|'[^']*'|[^()'"])*)\))?''',
     caseSensitive: false,
   );
   static final RegExp _attrPattern = RegExp(
@@ -473,4 +484,42 @@ class CssSelector {
     flush();
     return tokens;
   }
+}
+
+/// Per-resolution sibling index and work budget for authored selectors.
+class CssMatchContext {
+  CssMatchContext({int maxVisits = 2000000}) : _remaining = maxVisits;
+
+  int _remaining;
+  final _siblings = <dom.Element, (int, dom.Element?)>{};
+  final _indexedParents = <dom.Element>{};
+
+  void visit() {
+    if (--_remaining < 0) throw const CssMatchLimitException();
+  }
+
+  void _index(dom.Element element) {
+    final parent = element.parent;
+    if (parent == null || !_indexedParents.add(parent)) return;
+    dom.Element? previous;
+    var position = 0;
+    for (final sibling in parent.children) {
+      _siblings[sibling] = (++position, previous);
+      previous = sibling;
+    }
+  }
+
+  int position(dom.Element element) {
+    _index(element);
+    return _siblings[element]?.$1 ?? 0;
+  }
+
+  dom.Element? previous(dom.Element element) {
+    _index(element);
+    return _siblings[element]?.$2;
+  }
+}
+
+class CssMatchLimitException implements Exception {
+  const CssMatchLimitException();
 }

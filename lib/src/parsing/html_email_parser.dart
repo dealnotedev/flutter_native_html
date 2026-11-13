@@ -13,6 +13,7 @@ class ParsedEmail {
     required this.stylesheet,
     this.colorScheme,
     this.lineHeightQuirk = false,
+    this.allowDataUriImages = true,
   });
 
   /// The author's doctype puts the document in quirks or limited-quirks mode
@@ -28,6 +29,7 @@ class ParsedEmail {
   /// The view caches preparation; mutations require a new ParsedEmail instance.
   final dom.Element root;
   final CssStylesheet stylesheet;
+  final bool allowDataUriImages;
 
   /// The head's color-scheme hint, including the legacy supported-color-schemes
   /// spelling. It is data for rendering policy, never active HTML.
@@ -109,6 +111,8 @@ class HtmlEmailParser {
         document.documentElement ??
         document.createElement('body');
     sanitizer.sanitize(body);
+    final html = body.parent;
+    if (html != null) sanitizer.sanitizeRootAttributes(html);
 
     String? colorScheme;
     for (final meta
@@ -124,6 +128,7 @@ class HtmlEmailParser {
       stylesheet: stylesheet,
       colorScheme: colorScheme,
       lineHeightQuirk: lineHeightQuirk,
+      allowDataUriImages: sanitizer.allowDataUriImages,
     );
   }
 
@@ -157,14 +162,21 @@ class HtmlEmailParser {
   CssStylesheet _collectStylesheet(dom.Document document) {
     final styleNodes = document.querySelectorAll('style');
     if (styleNodes.isEmpty) return CssStylesheet.empty;
-    final buffer = StringBuffer();
+    final blocks = <(String, String?)>[];
+    var characters = 0;
     for (final node in styleNodes) {
-      buffer.writeln(node.text);
-      if (buffer.length > maxCssCharacters) {
+      final text = node.text;
+      final media = node.attributes['media'];
+      characters += text.length + (media?.length ?? 0) + 1;
+      if (characters > maxCssCharacters) {
         throw const HtmlContentLimitException('CSS size limit exceeded');
       }
+      blocks.add((text, media));
     }
-    final stylesheet = CssParser.parseStylesheet(buffer.toString());
+    final stylesheet = CssParser.parseStyleBlocks(
+      blocks,
+      maxRules: maxCssRules,
+    );
     if (stylesheet.rules.length > maxCssRules) {
       throw const HtmlContentLimitException('CSS rule limit exceeded');
     }

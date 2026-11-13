@@ -245,6 +245,15 @@ class _RenderAnimatedImageBoundary extends RenderRepaintBoundary {
   bool _reportScheduled = false;
 
   @override
+  void performLayout() {
+    super.performLayout();
+    // Initially offstage render objects lay out without a paint pass.
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (attached) _reportVisibility(_intersectsViewport());
+    });
+  }
+
+  @override
   void paint(PaintingContext context, Offset offset) {
     // Runs even when the scroll viewport reuses this image's display list.
     _removeCompositionCallback ??= context.addCompositionCallback(_onCompose);
@@ -252,15 +261,23 @@ class _RenderAnimatedImageBoundary extends RenderRepaintBoundary {
   }
 
   void _onCompose(Layer layer) {
-    _visible = layer.attached && _intersectsViewport();
+    _queueVisibility(layer.attached && _intersectsViewport());
+  }
+
+  void _queueVisibility(bool visible) {
+    _visible = visible;
     if (_reportScheduled || _visible == _reportedVisible) return;
     _reportScheduled = true;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       _reportScheduled = false;
-      if (!attached || _visible == _reportedVisible) return;
-      _reportedVisible = _visible;
-      onVisibilityChanged(_visible);
+      if (attached) _reportVisibility(_visible);
     });
+  }
+
+  void _reportVisibility(bool visible) {
+    if (visible == _reportedVisible) return;
+    _reportedVisible = visible;
+    onVisibilityChanged(visible);
   }
 
   bool _intersectsViewport() {

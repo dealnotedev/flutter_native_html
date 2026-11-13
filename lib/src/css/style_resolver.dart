@@ -5,6 +5,7 @@ import 'css_color.dart';
 import 'css_declaration_mapper.dart';
 import 'css_length.dart';
 import 'css_parser.dart';
+import 'css_selector.dart';
 import 'css_stylesheet.dart';
 import 'css_variables.dart';
 import 'email_color_transform.dart';
@@ -25,7 +26,9 @@ class StyleResolver {
     this.brightness = Brightness.light,
     this.canvasColor = const Color(0xffffffff),
     this.colorTransform,
-  }) : rootFontSize = rootStyle.resolvedFontSize;
+    CssMatchContext? matchContext,
+  }) : rootFontSize = rootStyle.resolvedFontSize,
+       _matches = matchContext ?? CssMatchContext();
 
   final CssStylesheet stylesheet;
   final HtmlStyle rootStyle;
@@ -33,6 +36,19 @@ class StyleResolver {
   final Brightness brightness;
   final Color canvasColor;
   final EmailColorTransform? colorTransform;
+  final CssMatchContext _matches;
+
+  bool hasDarkStylesFor(dom.Element element) => stylesheet.hasDarkStylesFor(
+    element,
+    availableWidth,
+    matchContext: _matches,
+  );
+
+  HtmlStyle documentParentStyle(dom.Element body) {
+    final inherited = rootStyle.inheritedOnly();
+    final html = body.parent;
+    return html == null ? inherited : resolve(html, inherited);
+  }
 
   /// The width (logical px) the email is being laid out at. Used to evaluate
   /// width media queries so responsive emails adapt. Appearance is evaluated
@@ -50,12 +66,13 @@ class StyleResolver {
             element,
             availableWidth,
             brightness: brightness,
+            matchContext: _matches,
           ),
   );
 
   final _sheetCache = <dom.Element, CssDecls>{};
   final _inlineCache = <dom.Element, CssDecls>{};
-  final _declarationCache = <dom.Element, Map<String, String>>{};
+  final _declarationCache = <dom.Element, CssDecls>{};
   final _variables = <dom.Element, CssVariables>{};
   final _backgrounds = <dom.Element, Color>{};
   final _imageBackgrounds = <dom.Element, _BitmapBackdrop>{};
@@ -65,6 +82,7 @@ class StyleResolver {
     rootStyle: rootStyle.merge(const HtmlStyle(color: Color(0xff000000))),
     availableWidth: availableWidth,
     brightness: brightness,
+    matchContext: _matches,
   );
 
   HtmlStyle _sourceStyleFor(dom.Element element) =>
@@ -80,51 +98,70 @@ class StyleResolver {
     () => CssParser.parseInlineDeclarations(element.attributes['style'] ?? ''),
   );
 
-  Map<String, String> _cascade(dom.Element element) =>
+  CssDecls _cascade(dom.Element element) =>
       _declarationCache.putIfAbsent(element, () {
         final sheet = sheetDeclarationsFor(element);
         final inline = _inlineFor(element);
         final values = <String, String>{};
+        final pending = <String, String>{};
         for (final important in [false, true]) {
           for (final source in [sheet, inline]) {
             for (final entry in source.values.entries) {
               if (source.important.contains(entry.key) != important) continue;
               values.remove(entry.key);
               values[entry.key] = entry.value;
+              if (source.pendingShorthands[entry.key] case final shorthand?) {
+                pending[entry.key] = shorthand;
+              } else {
+                pending.remove(entry.key);
+              }
             }
           }
         }
-        return values;
+        return CssDecls(values, const {}, pending);
       });
 
   CssVariables _variablesFor(dom.Element element) => _variables.putIfAbsent(
     element,
     () => CssVariables(
       Map.fromEntries(
-        _cascade(element).entries.where((e) => e.key.startsWith('--')),
+        _cascade(element).values.entries.where((e) => e.key.startsWith('--')),
       ),
       element.parent == null ? null : _variablesFor(element.parent!),
     ),
   );
 
   /// Substitution is done after the cascade, against computed inherited tokens.
-  Map<String, String> computedDeclarationsFor(dom.Element element) {
-    final variables = _variablesFor(element);
-    return {
-      for (final entry in _cascade(element).entries)
-        if (!entry.key.startsWith('--'))
-          if (variables.resolve(entry.value) case final String value)
-            entry.key: value,
-    };
-  }
+  Map<String, String> computedDeclarationsFor(dom.Element element) =>
+      _substitute(_cascade(element), _variablesFor(element));
 
-  Map<String, String> resolvedSheetDeclarationsFor(dom.Element element) {
-    final variables = _variablesFor(element);
-    return {
-      for (final entry in sheetDeclarationsFor(element).values.entries)
-        if (variables.resolve(entry.value) case final String value)
-          entry.key: value,
-    };
+  Map<String, String> resolvedSheetDeclarationsFor(dom.Element element) =>
+      _substitute(sheetDeclarationsFor(element), _variablesFor(element));
+
+  Map<String, String> _substitute(
+    CssDecls declarations,
+    CssVariables variables,
+  ) {
+    final values = <String, String>{};
+    final expanded = <(String, String), Map<String, String>?>{};
+    for (final MapEntry(key: property, value: raw)
+        in declarations.values.entries) {
+      if (property.startsWith('--')) continue;
+      final value = variables.resolve(raw);
+      if (value == null) continue;
+      final shorthand = declarations.pendingShorthands[property];
+      final computed = shorthand == null
+          ? value
+          : expanded.putIfAbsent(
+              (shorthand, value),
+              () => CssDeclarationMapper.expandShorthand(shorthand, value),
+            )?[property];
+      if (computed != null &&
+          CssDeclarationMapper.accepts(property, computed)) {
+        values[property] = computed;
+      }
+    }
+    return values;
   }
 
   String? colorSchemeFor(dom.Element element) {
@@ -165,10 +202,7 @@ class StyleResolver {
     // The public rendering root is body, but :root/html still supplies inherited
     // typography and tokens. Never mutate or reparent the prepared document.
     if (element.localName == 'body' && element.parent?.localName == 'html') {
-      inherited = resolve(
-        element.parent!,
-        rootStyle.inheritedOnly(),
-      ).inheritedOnly();
+      inherited = documentParentStyle(element).inheritedOnly();
     }
     final cached = _cache[element];
     if (cached != null && identical(cached.inherited, inherited)) {
@@ -614,6 +648,11 @@ class StyleResolver {
     return HtmlStyle(
       borderSpacingH: spacing,
       borderSpacingV: spacing,
+      textDirection: switch (attrs['dir']?.toLowerCase()) {
+        'ltr' => TextDirection.ltr,
+        'rtl' => TextDirection.rtl,
+        _ => null,
+      },
       backgroundColor: backgroundColor,
       backgroundImage: backgroundImage,
       color: color,

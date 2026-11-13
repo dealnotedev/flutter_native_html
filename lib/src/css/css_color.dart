@@ -88,7 +88,7 @@ class CssColor {
     final h = double.tryParse(parts[0].replaceAll('deg', '').trim());
     final s = _percent(parts[1]);
     final l = _percent(parts[2]);
-    if (h == null || s == null || l == null) return null;
+    if (h == null || !h.isFinite || s == null || l == null) return null;
     final a = parts.length >= 4 ? _alpha(parts[3]) : 255;
     if (a == null) return null;
     final rgb = _hslToRgb(h % 360, s, l);
@@ -115,7 +115,7 @@ class CssColor {
       return p == null ? null : (p * 255).round().clamp(0, 255);
     }
     final v = double.tryParse(raw);
-    return v?.round().clamp(0, 255);
+    return v == null || !v.isFinite ? null : v.clamp(0, 255).round();
   }
 
   static int? _alpha(String raw) {
@@ -124,12 +124,12 @@ class CssColor {
       return p == null ? null : (p * 255).round().clamp(0, 255);
     }
     final v = double.tryParse(raw);
-    return v == null ? null : (v * 255).round().clamp(0, 255);
+    return v == null || !v.isFinite ? null : (v.clamp(0, 1) * 255).round();
   }
 
   static double? _percent(String raw) {
     final v = double.tryParse(raw.replaceAll('%', '').trim());
-    return v == null ? null : (v / 100.0).clamp(0.0, 1.0);
+    return v == null || !v.isFinite ? null : (v / 100.0).clamp(0.0, 1.0);
   }
 
   static List<int> _hslToRgb(double h, double s, double l) {

@@ -340,6 +340,22 @@ void main() {
     expect(controller.offsetX, closeTo(400, 1));
   });
 
+  testWidgets('shrinking the viewport reconciles the horizontal pan', (
+    tester,
+  ) async {
+    final controller = HtmlZoomController();
+    addTearDown(controller.dispose);
+    await _pump(tester, controller: controller);
+    controller.zoomTo(2);
+    await tester.pump();
+    await tester.dragFrom(const Offset(300, 200), const Offset(-700, 0));
+    await tester.pumpAndSettle();
+    expect(controller.offsetX, closeTo(400, 1));
+    tester.view.physicalSize = const Size(160, 600);
+    await tester.pumpAndSettle();
+    expect(controller.offsetX, closeTo(160, 1));
+  });
+
   testWidgets('a horizontal fling coasts to the edge of a zoomed message', (
     tester,
   ) async {

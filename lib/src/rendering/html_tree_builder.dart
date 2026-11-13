@@ -1,5 +1,3 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 import 'package:html/dom.dart' as dom;
@@ -10,7 +8,7 @@ import '../css/css_color.dart';
 import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
-import '../widget/html_image.dart';
+import 'css_background.dart';
 import 'css_border_decoration.dart';
 import 'css_border_radius.dart';
 import 'element_registry.dart';
@@ -41,7 +39,10 @@ class HtmlTreeBuilder {
     required HtmlStyle rootStyle,
     required StyleResolver resolver,
     this.lineHeightQuirk = false,
+    bool? allowDataUriImages,
   }) : _rootStyle = rootStyle, // ignore: prefer_initializing_formals
+       _allowDataUriImages =
+           allowDataUriImages ?? config.sanitizer.allowDataUriImages,
        _resolver = resolver; // ignore: prefer_initializing_formals
 
   final HtmlRenderConfig config;
@@ -50,11 +51,13 @@ class HtmlTreeBuilder {
   final bool lineHeightQuirk;
   final BuildContext buildContext;
   final HtmlStyle _rootStyle;
+  final bool _allowDataUriImages;
   final StyleResolver _resolver;
   late final HtmlImageResolver imageResolver = config.imageResolver
       .forDocument();
   final _descendantContexts =
       <(dom.Element, HtmlRenderContext), HtmlRenderContext>{};
+  final _anchorDeclarations = <dom.Element?, Map<String, String>>{};
 
   /// The logical px width the email is being laid out at (the media-query width).
   /// Used by table layout to clamp cell widths that exceed their container.
@@ -82,7 +85,10 @@ class HtmlTreeBuilder {
 
   /// Builds the full body element into a single block widget.
   Widget buildRoot(dom.Element body) {
-    final style = _resolver.resolve(body, _rootStyle.inheritedOnly());
+    final parentStyle = _resolver.documentParentStyle(body);
+    if (parentStyle.display == CssDisplay.none) return const SizedBox.shrink();
+    final style = _resolver.resolve(body, parentStyle.inheritedOnly());
+    if (style.display == CssDisplay.none) return const SizedBox.shrink();
     final ctx = HtmlRenderContext(
       element: body,
       builder: this,
@@ -263,15 +269,8 @@ class HtmlTreeBuilder {
     final preserve = inherited.preservesWhitespace;
     final preserveNewlines = inherited.preservesNewlines;
     final textStyle = inherited.toTextStyle();
-    final transform = inherited.textTransform;
     if (preserve) {
-      return _spansFor(
-        _transform(raw, transform),
-        textStyle,
-        linkify,
-        inherited,
-        parent,
-      );
+      return _spansFor(raw, textStyle, linkify, inherited, parent);
     }
     final collapsed = preserveNewlines
         ? raw
@@ -290,13 +289,7 @@ class HtmlTreeBuilder {
         ),
       ];
     }
-    return _spansFor(
-      _transform(collapsed, transform),
-      textStyle,
-      linkify,
-      inherited,
-      parent,
-    );
+    return _spansFor(collapsed, textStyle, linkify, inherited, parent);
   }
 
   /// Builds spans for a text run, optionally turning bare emails/URLs into
@@ -308,6 +301,7 @@ class HtmlTreeBuilder {
     HtmlStyle inherited,
     dom.Element? parent,
   ) {
+    final transform = inherited.textTransform;
     final wrapping = inherited.preventsWrapping
         ? null
         : switch (inherited.wordBreak) {
@@ -332,8 +326,8 @@ class HtmlTreeBuilder {
             ),
     );
 
-    if (!linkify) {
-      return [run(text, style)];
+    if (!linkify || inherited.visibilityHidden == true) {
+      return [run(_transform(text, transform), style)];
     }
     final matches = _linkPattern.allMatches(text).where((m) {
       if (m.group(1) != null) {
@@ -345,7 +339,7 @@ class HtmlTreeBuilder {
       return _isKnownDomain(_stripTrailingPunctuation(m.group(0)!));
     }).toList();
     if (matches.isEmpty) {
-      return [run(text, style)];
+      return [run(_transform(text, transform), style)];
     }
 
     final results = <HtmlBuildResult>[];
@@ -354,7 +348,9 @@ class HtmlTreeBuilder {
     var last = 0;
     for (final m in matches) {
       if (m.start > last) {
-        results.add(run(text.substring(last, m.start), style));
+        results.add(
+          run(_transform(text.substring(last, m.start), transform), style),
+        );
       }
       final raw = m.group(0)!;
       final token = _stripTrailingPunctuation(raw);
@@ -366,14 +362,14 @@ class HtmlTreeBuilder {
         recognizer = TapGestureRecognizer()..onTap = () => onTap(url, const {});
         recognizers.add(recognizer);
       }
-      results.add(run(token, linkStyle, recognizer));
+      results.add(run(_transform(token, transform), linkStyle, recognizer));
       if (trailing.isNotEmpty) {
-        results.add(run(trailing, style));
+        results.add(run(_transform(trailing, transform), style));
       }
       last = m.end;
     }
     if (last < text.length) {
-      results.add(run(text.substring(last), style));
+      results.add(run(_transform(text.substring(last), transform), style));
     }
     return results;
   }
@@ -451,11 +447,12 @@ class HtmlTreeBuilder {
   /// Author-stylesheet declarations that apply to an `<a>` at [parent]'s
   /// position (UA/inline styling excluded). Resolved via a throwaway `<a>` so
   /// descendant selectors (`#wrap a`, `.body a`) still match the real ancestry.
-  Map<String, String> _anchorAuthorDeclarations(dom.Element? parent) {
-    final anchor = dom.Element.tag('a');
-    if (parent != null) anchor.parentNode = parent;
-    return _resolver.resolvedSheetDeclarationsFor(anchor);
-  }
+  Map<String, String> _anchorAuthorDeclarations(dom.Element? parent) =>
+      _anchorDeclarations.putIfAbsent(parent, () {
+        final anchor = dom.Element.tag('a');
+        if (parent != null) anchor.parentNode = parent;
+        return _resolver.resolvedSheetDeclarationsFor(anchor);
+      });
 
   static TextDecoration? _authorDecoration(String? value) {
     if (value == null) return null;
@@ -921,6 +918,19 @@ class HtmlTreeBuilder {
     );
   }
 
+  /// Whether the host provided an override for this element name.
+  bool hasCustomElementHandler(String tag) =>
+      _registry.customHandlerFor(tag) != null;
+
+  /// Invokes a host override for a child whose layout is owned by its parent.
+  List<HtmlBuildResult>? buildCustomElement(
+    dom.Element element,
+    HtmlRenderContext context,
+  ) {
+    final handler = _registry.customHandlerFor(element.localName ?? '');
+    return handler?.build(element, context);
+  }
+
   /// Resolves an actual DOM path, retaining styles on intermediate containers
   /// such as tbody. Direct table layout must not skip these ancestors.
   HtmlRenderContext contextForDescendant(
@@ -978,20 +988,16 @@ class HtmlTreeBuilder {
           throw StateError('Non-inline content must be assembled by flow()');
       }
     }
+    final background = ctx.style.visibilityHidden == true
+        ? null
+        : ctx.style.backgroundColor;
+    final spanStyle = background == null
+        ? null
+        : TextStyle(backgroundColor: background);
     if (ctx.style.preservesWhitespace) {
-      return _PreservedWhitespaceSpan(
-        children: spans,
-        style: ctx.style.backgroundColor != null
-            ? TextStyle(backgroundColor: ctx.style.backgroundColor)
-            : null,
-      );
+      return _PreservedWhitespaceSpan(children: spans, style: spanStyle);
     }
-    return TextSpan(
-      children: spans,
-      style: ctx.style.backgroundColor != null
-          ? TextStyle(backgroundColor: ctx.style.backgroundColor)
-          : null,
-    );
+    return TextSpan(children: spans, style: spanStyle);
   }
 
   /// Flows an element's children into a block widget and applies its box
@@ -1740,8 +1746,9 @@ class HtmlTreeBuilder {
       style.padding?.resolve(fontSize: fontSize, rootFontSize: rootFontSize),
     );
     final percentPadding = _percentPadding(style.padding);
+    final hidden = style.visibilityHidden == true;
     final border = style.borders?.toBorder();
-    final background = style.backgroundColor;
+    final background = hidden ? null : style.backgroundColor;
 
     // A CSS background-image (e.g. a social-icon sprite or an image bullet) is
     // drawn behind the content, offset by background-position. The background
@@ -1762,7 +1769,15 @@ class HtmlTreeBuilder {
       containerPadding = null;
       applyPercentInside = false;
     }
-    content = _withBackgroundImage(content, style);
+    if (!hidden) {
+      content = paintCssBackground(
+        content,
+        style,
+        imageResolver: imageResolver,
+        allowDataUriImages: _allowDataUriImages,
+        pauseOffscreenAnimations: config.pauseOffscreenImageAnimations,
+      );
+    }
 
     final requestedRadius = cssBorderRadius(style);
     final patternedBorder = style.borders == null
@@ -1895,11 +1910,13 @@ class HtmlTreeBuilder {
       decoration: hasDecoration
           ? BoxDecoration(
               color: background,
-              border: border,
+              border: hidden ? _invisibleBorder(border) : border,
               borderRadius: radius,
             )
           : null,
-      foregroundDecoration: hasPatternedBorder ? patternedBorder : null,
+      foregroundDecoration: hasPatternedBorder && !hidden
+          ? patternedBorder
+          : null,
       clipBehavior: radius != null && hasDecoration
           ? Clip.antiAlias
           : Clip.none,
@@ -1994,11 +2011,6 @@ class HtmlTreeBuilder {
         child: result,
       );
     }
-    if (style.visibilityHidden ?? false) {
-      result = IgnorePointer(
-        child: ExcludeSemantics(child: Opacity(opacity: 0, child: result)),
-      );
-    }
     if ((resolvedMargin?.left ?? 0) < 0 || (resolvedMargin?.right ?? 0) < 0) {
       result = NegativeHorizontalMargin(
         left: (resolvedMargin?.left ?? 0).clamp(double.negativeInfinity, 0),
@@ -2007,6 +2019,18 @@ class HtmlTreeBuilder {
       );
     }
     return result;
+  }
+
+  static Border? _invisibleBorder(Border? border) {
+    if (border == null) return null;
+    BorderSide invisible(BorderSide side) =>
+        side.copyWith(color: const Color(0x00000000));
+    return Border(
+      top: invisible(border.top),
+      right: invisible(border.right),
+      bottom: invisible(border.bottom),
+      left: invisible(border.left),
+    );
   }
 
   Alignment _blockAlignment(
@@ -2026,161 +2050,6 @@ class HtmlTreeBuilder {
     if (align == TextAlign.center) return Alignment.topCenter;
     if (align == TextAlign.right) return Alignment.topRight;
     return centerByMaxWidth ? Alignment.topCenter : Alignment.topLeft;
-  }
-
-  /// Draws a CSS `background-image` behind [content], offset by
-  /// `background-position` and clipped to the box (CSS sprites). Honors the
-  /// image policy, so a remote sprite is shown only when remote images are
-  /// allowed; otherwise the content renders without it.
-  Widget _withBackgroundImage(Widget content, HtmlStyle style) {
-    final url = style.backgroundImage;
-    if (url == null || url.isEmpty) return content;
-    if (url.trimLeft().toLowerCase().startsWith('linear-gradient(')) {
-      final gradient = _linearGradient(url);
-      if (gradient == null) return content;
-      Widget result = DecoratedBox(
-        decoration: BoxDecoration(gradient: gradient),
-        child: content,
-      );
-      final radius = cssBorderRadius(style);
-      if (radius != null) {
-        result = ClipRRect(borderRadius: radius, child: result);
-      }
-      return result;
-    }
-    if (url.trimLeft().toLowerCase().startsWith('data:') &&
-        !config.sanitizer.allowDataUriImages) {
-      return content;
-    }
-    final resolution = imageResolver.resolve(url, const {});
-    if (!resolution.hasImage) return content;
-
-    // Clip the background (and its overflow) to the box, rounding the corners
-    // when the box has a border-radius — e.g. a hero banner with rounded edges.
-    final radius = cssBorderRadius(style);
-    Widget clip(Widget child) => radius != null
-        ? ClipRRect(borderRadius: radius, child: child)
-        : ClipRect(child: child);
-
-    // A scaled background (background-size: cover/contain/100%) fills the box —
-    // e.g. a full-bleed hero banner behind centred content.
-    final size = style.backgroundSize;
-    final spriteWidth = (size != null && size.endsWith('px'))
-        ? double.tryParse(size.substring(0, size.length - 2))
-        : null;
-    final repeat = _imageRepeat(style.backgroundRepeat);
-    if (repeat != ImageRepeat.noRepeat && size == null) {
-      return clip(
-        _TiledBackground(
-          image: resolution.provider!,
-          repeat: repeat,
-          alignment: style.backgroundPosition ?? Alignment.topLeft,
-          child: content,
-        ),
-      );
-    }
-    if (size != null && spriteWidth == null) {
-      final fit = switch (size) {
-        'cover' => BoxFit.cover,
-        'contain' => BoxFit.contain,
-        _ => BoxFit.fitWidth, // '100%': scale to the box width
-      };
-      return clip(
-        Stack(
-          clipBehavior: Clip.hardEdge,
-          children: [
-            Positioned.fill(
-              child: buildHtmlImage(
-                pauseOffscreenAnimations: config.pauseOffscreenImageAnimations,
-                image: resolution.provider!,
-                fit: fit,
-                alignment: style.backgroundPosition ?? Alignment.center,
-              ),
-            ),
-            content,
-          ],
-        ),
-      );
-    }
-
-    // Otherwise a CSS sprite drawn at its position — natural size, or a fixed
-    // width from `background-size:Npx` (an image bullet/icon).
-    final x = style.backgroundPositionX ?? 0;
-    final y = style.backgroundPositionY ?? 0;
-    return clip(
-      Stack(
-        clipBehavior: Clip.hardEdge,
-        children: [
-          Positioned(
-            left: x,
-            top: y,
-            child: buildHtmlImage(
-              pauseOffscreenAnimations: config.pauseOffscreenImageAnimations,
-              image: resolution.provider!,
-              width: spriteWidth,
-            ),
-          ),
-          content,
-        ],
-      ),
-    );
-  }
-
-  static LinearGradient? _linearGradient(String value) {
-    final match = RegExp(
-      r'^linear-gradient\((.*)\)$',
-      caseSensitive: false,
-      dotAll: true,
-    ).firstMatch(value.trim());
-    if (match == null) return null;
-    final parts = <String>[];
-    var depth = 0, start = 0;
-    final body = match.group(1)!;
-    for (var i = 0; i < body.length; i++) {
-      if (body[i] == '(') depth++;
-      if (body[i] == ')') depth--;
-      if (body[i] == ',' && depth == 0) {
-        parts.add(body.substring(start, i).trim());
-        start = i + 1;
-      }
-    }
-    parts.add(body.substring(start).trim());
-    var begin = Alignment.topCenter, end = Alignment.bottomCenter;
-    if (parts.first.toLowerCase().startsWith('to ')) {
-      final direction = parts.removeAt(0).toLowerCase();
-      final ends = switch (direction) {
-        'to bottom' => (Alignment.topCenter, Alignment.bottomCenter),
-        'to top' => (Alignment.bottomCenter, Alignment.topCenter),
-        'to right' => (Alignment.centerLeft, Alignment.centerRight),
-        'to left' => (Alignment.centerRight, Alignment.centerLeft),
-        'to bottom right' ||
-        'to right bottom' => (Alignment.topLeft, Alignment.bottomRight),
-        'to bottom left' ||
-        'to left bottom' => (Alignment.topRight, Alignment.bottomLeft),
-        'to top right' ||
-        'to right top' => (Alignment.bottomLeft, Alignment.topRight),
-        'to top left' ||
-        'to left top' => (Alignment.bottomRight, Alignment.topLeft),
-        _ => null,
-      };
-      if (ends == null) return null;
-      begin = ends.$1;
-      end = ends.$2;
-    }
-    final colors = parts.map(CssColor.tryParse).toList();
-    if (colors.length < 2 || colors.any((color) => color == null)) return null;
-    return LinearGradient(begin: begin, end: end, colors: colors.cast<Color>());
-  }
-
-  static ImageRepeat _imageRepeat(CssBackgroundRepeat? repeat) {
-    return switch (repeat) {
-      // CSS defaults `background-repeat` to `repeat`. Paint tiling in a custom
-      // paint-only layer so it never participates in layout.
-      CssBackgroundRepeat.repeat || null => ImageRepeat.repeat,
-      CssBackgroundRepeat.repeatX => ImageRepeat.repeatX,
-      CssBackgroundRepeat.repeatY => ImageRepeat.repeatY,
-      CssBackgroundRepeat.noRepeat => ImageRepeat.noRepeat,
-    };
   }
 
   static EdgeInsets? _clampNonNegative(EdgeInsets? insets) {
@@ -2352,177 +2221,4 @@ class HtmlTreeBuilder {
 
 class _PreservedWhitespaceSpan extends TextSpan {
   const _PreservedWhitespaceSpan({super.children, super.style});
-}
-
-class _TiledBackground extends StatefulWidget {
-  const _TiledBackground({
-    required this.image,
-    required this.repeat,
-    required this.alignment,
-    required this.child,
-  });
-
-  final ImageProvider image;
-  final ImageRepeat repeat;
-  final AlignmentGeometry alignment;
-  final Widget child;
-
-  @override
-  State<_TiledBackground> createState() => _TiledBackgroundState();
-}
-
-class _TiledBackgroundState extends State<_TiledBackground> {
-  ImageStream? _stream;
-  ImageStreamListener? _listener;
-  ImageInfo? _imageInfo;
-  bool _acceptedFrameForStream = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _resolveImage();
-  }
-
-  @override
-  void didUpdateWidget(_TiledBackground oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.image != widget.image) _resolveImage();
-  }
-
-  @override
-  void dispose() {
-    _removeStreamListener();
-    _imageInfo?.dispose();
-    super.dispose();
-  }
-
-  void _resolveImage() {
-    final listener = _listener ??= ImageStreamListener(_handleImage);
-    final stream = widget.image.resolve(createLocalImageConfiguration(context));
-    if (_stream?.key == stream.key) return;
-    _stream?.removeListener(listener);
-    _acceptedFrameForStream = false;
-    _stream = stream..addListener(listener);
-  }
-
-  void _handleImage(ImageInfo imageInfo, bool synchronousCall) {
-    if (_acceptedFrameForStream) {
-      imageInfo.dispose();
-      return;
-    }
-    _acceptedFrameForStream = true;
-    final oldInfo = _imageInfo;
-    if (oldInfo?.image == imageInfo.image &&
-        oldInfo?.scale == imageInfo.scale) {
-      imageInfo.dispose();
-      return;
-    }
-    _imageInfo = imageInfo;
-    oldInfo?.dispose();
-    // Repeated backgrounds are decorative tiles. Freezing them at the first
-    // decoded frame prevents animated GIF backgrounds from invalidating and
-    // repainting the whole tiled layer on every frame.
-    _removeStreamListener();
-    if (mounted) setState(() {});
-  }
-
-  void _removeStreamListener() {
-    final listener = _listener;
-    final stream = _stream;
-    if (listener != null && stream != null) {
-      stream.removeListener(listener);
-    }
-    _stream = null;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _imageInfo == null
-          ? null
-          : _TiledBackgroundPainter(
-              imageInfo: _imageInfo!,
-              repeat: widget.repeat,
-              alignment: widget.alignment.resolve(
-                Directionality.maybeOf(context),
-              ),
-            ),
-      child: widget.child,
-    );
-  }
-}
-
-class _TiledBackgroundPainter extends CustomPainter {
-  const _TiledBackgroundPainter({
-    required this.imageInfo,
-    required this.repeat,
-    required this.alignment,
-  });
-
-  final ImageInfo imageInfo;
-  final ImageRepeat repeat;
-  final Alignment alignment;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.isEmpty) return;
-    final image = imageInfo.image;
-    final scale = imageInfo.scale;
-    if (image.width <= 0 || image.height <= 0 || scale <= 0) return;
-
-    final tileSize = Size(image.width / scale, image.height / scale);
-    if (tileSize.isEmpty) return;
-
-    final repeatX =
-        repeat == ImageRepeat.repeat || repeat == ImageRepeat.repeatX;
-    final repeatY =
-        repeat == ImageRepeat.repeat || repeat == ImageRepeat.repeatY;
-    final origin = alignment.alongOffset(
-      Offset(size.width - tileSize.width, size.height - tileSize.height),
-    );
-    final logicalRect = Rect.fromLTWH(
-      repeatX ? 0 : origin.dx,
-      repeatY ? 0 : origin.dy,
-      repeatX ? size.width : tileSize.width,
-      repeatY ? size.height : tileSize.height,
-    ).intersect(Offset.zero & size);
-    if (logicalRect.isEmpty) return;
-
-    // `paintImage(repeat: ...)` expands repeats by drawing many image rects.
-    // A small footer tile plus an animated GIF elsewhere in the email can then
-    // repaint thousands of tiny images per second. Use an ImageShader instead:
-    // one draw call fills the repeated area, while non-repeated axes are clipped
-    // to the tile's natural extent so they don't stretch.
-    final paint = Paint()
-      ..isAntiAlias = false
-      ..shader = ui.ImageShader(
-        image,
-        repeatX ? ui.TileMode.repeated : ui.TileMode.clamp,
-        repeatY ? ui.TileMode.repeated : ui.TileMode.clamp,
-        Matrix4.identity().storage,
-      );
-
-    canvas.save();
-    canvas.clipRect(Offset.zero & size);
-    canvas.translate(origin.dx, origin.dy);
-    canvas.scale(1 / scale, 1 / scale);
-    canvas.drawRect(
-      Rect.fromLTWH(
-        (logicalRect.left - origin.dx) * scale,
-        (logicalRect.top - origin.dy) * scale,
-        logicalRect.width * scale,
-        logicalRect.height * scale,
-      ),
-      paint,
-    );
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_TiledBackgroundPainter oldDelegate) {
-    return oldDelegate.imageInfo.image != imageInfo.image ||
-        oldDelegate.imageInfo.scale != imageInfo.scale ||
-        oldDelegate.repeat != repeat ||
-        oldDelegate.alignment != alignment;
-  }
 }

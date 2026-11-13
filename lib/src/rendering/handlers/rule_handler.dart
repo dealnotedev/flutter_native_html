@@ -48,7 +48,10 @@ class RuleHandler extends HtmlElementHandler {
       if (px != null && px > 0) thickness = px;
     }
 
-    final rule = Container(height: thickness, color: color);
+    final rule = Container(
+      height: thickness,
+      color: style.visibilityHidden == true ? null : color,
+    );
     // Apply margins plus any explicit width/max-width (`hr{width:50%}`); the
     // line itself already represents the border.
     final spacing = context.builder.decorate(
@@ -57,6 +60,7 @@ class RuleHandler extends HtmlElementHandler {
         margin: style.margin,
         width: style.width,
         maxWidth: style.maxWidth,
+        opacity: style.opacity,
       ),
     );
     return [BlockResult(spacing)];

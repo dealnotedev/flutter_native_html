@@ -50,9 +50,12 @@ void main() {
         '<div style="visibility:hidden;height:40px">hidden</div><p>after</p>',
       ),
     );
-    final opacity = find.byType(Opacity);
-    expect(opacity, findsOneWidget);
-    expect(tester.getSize(opacity).height, closeTo(40, 1));
+    final hidden = find.text('hidden', findRichText: true);
+    final after = find.text('after', findRichText: true);
+    expect(
+      tester.getTopLeft(after).dy - tester.getTopLeft(hidden).dy,
+      greaterThanOrEqualTo(40),
+    );
   });
 
   testWidgets('box-sizing distinguishes content-box and border-box', (

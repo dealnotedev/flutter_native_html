@@ -14,6 +14,141 @@ import 'html_style.dart';
 /// are kept as [CssLength] in the style and resolved later by handlers against
 /// the element's own font size and the container width.
 class CssDeclarationMapper {
+  /// Rejects unsupported literal values before they can displace fallbacks.
+  /// Variable references are validated after substitution.
+  static bool accepts(String property, String value) {
+    if (property.startsWith('--') || value.contains('var(')) return true;
+    final keyword = value.trim().toLowerCase();
+    return switch (property) {
+      'color' =>
+        const {
+              'inherit',
+              'unset',
+              'initial',
+              'currentcolor',
+            }.contains(keyword) ||
+            CssColor.tryParse(value) != null,
+      'background-color' =>
+        keyword == 'initial' || CssColor.tryParse(value) != null,
+      'text-decoration-color' => CssColor.tryParse(value) != null,
+      'background-image' =>
+        keyword == 'none' ||
+            _urlFrom(value) != null ||
+            _gradientFrom(value) != null,
+      'display' => _display(value) != null,
+      'font-size' => _fontSize(value, 16, 16) != null,
+      'font-weight' => _fontWeight(value, parent: FontWeight.normal) != null,
+      'font-style' => _fontStyle(value) != null,
+      'font-family' =>
+        const {'inherit', 'unset', 'initial'}.contains(keyword) ||
+            _fontFamilies(value) != null,
+      'text-align' => _textAlign(value) != null,
+      'text-transform' => _textTransform(value) != null,
+      'white-space' => _whiteSpace(value) != null,
+      'direction' => keyword == 'ltr' || keyword == 'rtl',
+      'visibility' => const {'visible', 'hidden', 'collapse'}.contains(keyword),
+      'width' ||
+      'height' ||
+      'min-width' ||
+      'max-width' ||
+      'min-height' ||
+      'max-height' =>
+        CssLength.tryParse(value) != null ||
+            (keyword == 'none' && property.startsWith('max-')),
+      'background-repeat' => _backgroundRepeat(value) != null,
+      'background-size' => keyword == 'auto' || _backgroundSize(value) != null,
+      _ => true,
+    };
+  }
+
+  static const shorthandLonghands = {
+    'background': [
+      'background-image',
+      'background-color',
+      'background-position',
+      'background-repeat',
+      'background-size',
+    ],
+    'font': [
+      'font-style',
+      'font-weight',
+      'font-size',
+      'font-family',
+      'line-height',
+    ],
+  };
+
+  static Map<String, String>? expandShorthand(String property, String value) {
+    if (property == 'font') {
+      final font = _fontShorthand(value, 16, 16, FontWeight.normal);
+      if (font.fontSize == null || font.fontFamilies == null) return null;
+      return {
+        'font-style': font.fontStyle == FontStyle.italic ? 'italic' : 'normal',
+        'font-weight': font.weightToken ?? 'normal',
+        'font-size': font.sizeToken!,
+        'font-family': font.familyValue!,
+        'line-height': font.lineHeight ?? 'normal',
+      };
+    }
+    if (property != 'background') return null;
+    final parts = _splitCssTokens(_spaceBackgroundSlash(value));
+    final position = <String>[];
+    String? image, color, repeat, size;
+    var afterSlash = false;
+    for (final part in parts) {
+      if (part == '/') {
+        afterSlash = true;
+      } else if (afterSlash && _backgroundSize(part) != null) {
+        size = part;
+        afterSlash = false;
+      } else if (_urlFrom(part) != null || _gradientFrom(part) != null) {
+        image = part;
+      } else if (CssColor.tryParse(part) != null) {
+        color = part;
+      } else if (_backgroundRepeat(part) != null) {
+        repeat = part;
+      } else if (_positionToken(part) != null ||
+          _backgroundAlignment(part) != null) {
+        position.add(part);
+      }
+    }
+    if (image == null &&
+        color == null &&
+        repeat == null &&
+        position.isEmpty &&
+        value.trim().toLowerCase() != 'none') {
+      return null;
+    }
+    final gradientColor = image == null ? null : _firstGradientColor(image);
+    // Convert Flutter's AARRGGBB to CSS RRGGBBAA.
+    final argb = gradientColor?.toARGB32();
+    final rgba = argb == null
+        ? null
+        : ((argb << 8) & 0xffffffff) | (argb >> 24);
+    return {
+      'background-image': image ?? 'none',
+      'background-color':
+          color ??
+          (rgba == null
+              ? 'initial'
+              : '#${rgba.toRadixString(16).padLeft(8, '0')}'),
+      'background-position': position.isEmpty ? '0% 0%' : position.join(' '),
+      'background-repeat': repeat ?? 'repeat',
+      'background-size': size ?? 'auto',
+    };
+  }
+
+  static String _spaceBackgroundSlash(String value) {
+    final result = StringBuffer();
+    var depth = 0;
+    for (final char in value.split('')) {
+      if (char == '(') depth++;
+      if (char == ')' && depth > 0) depth--;
+      result.write(char == '/' && depth == 0 ? ' / ' : char);
+    }
+    return result.toString();
+  }
+
   const CssDeclarationMapper._();
 
   static HtmlStyle map(
@@ -153,7 +288,13 @@ class CssDeclarationMapper {
           };
           break;
         case 'background-color':
-          backgroundColor = CssColor.tryParse(value) ?? backgroundColor;
+          if (value.trim().toLowerCase() == 'initial') {
+            backgroundColor = null;
+            resets.add('background-color');
+          } else if (CssColor.tryParse(value) case final parsed?) {
+            backgroundColor = parsed;
+            resets.remove('background-color');
+          }
           break;
         case 'background':
           backgroundColor = _colorFromShorthand(value) ?? backgroundColor;
@@ -1114,6 +1255,8 @@ class CssDeclarationMapper {
     FontWeight? weight;
     double? size;
     String? lineHeight;
+    String? sizeToken;
+    String? weightToken;
     // `14px/20px` and `14px / 20px` both carry the line-height.
     final tokens = value
         .trim()
@@ -1129,22 +1272,32 @@ class CssDeclarationMapper {
       final w = _fontWeight(t, parent: inheritedFontWeight);
       if (w != null && (t == 'bold' || int.tryParse(t) != null)) {
         weight = w;
+        weightToken = t;
         continue;
       }
       final parts = t.split('/');
       final fs = _fontSize(parts.first, parent, root);
       if (fs != null && size == null) {
         size = fs;
+        sizeToken = parts.first;
         if (parts.length > 1 && parts[1].isNotEmpty) lineHeight = parts[1];
         continue;
       }
       remainder.add(t);
     }
-    final families = remainder.isEmpty
-        ? null
-        : _fontFamilies(remainder.join(' '));
+    final familyValue = remainder.isEmpty ? null : remainder.join(' ');
+    final families = familyValue == null ? null : _fontFamilies(familyValue);
     final safeSize = size != null && size.isFinite && size >= 0 ? size : null;
-    return _FontShorthand(style, weight, safeSize, families, lineHeight);
+    return _FontShorthand(
+      style,
+      weight,
+      safeSize,
+      families,
+      lineHeight,
+      sizeToken: sizeToken,
+      weightToken: weightToken,
+      familyValue: familyValue,
+    );
   }
 }
 
@@ -1154,8 +1307,11 @@ class _FontShorthand {
     this.fontWeight,
     this.fontSize,
     this.fontFamilies,
-    this.lineHeight,
-  );
+    this.lineHeight, {
+    this.sizeToken,
+    this.weightToken,
+    this.familyValue,
+  });
   final FontStyle? fontStyle;
   final FontWeight? fontWeight;
   final double? fontSize;
@@ -1163,4 +1319,7 @@ class _FontShorthand {
 
   /// The raw `/line-height` part, if any.
   final String? lineHeight;
+  final String? sizeToken;
+  final String? weightToken;
+  final String? familyValue;
 }

@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:html/dom.dart' as dom;
 
 import '../config/html_render_config.dart';
+import '../css/css_selector.dart';
 import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
@@ -50,9 +51,9 @@ bool hasNoHtmlPageLayout(
     textDirection: textDirection,
     color: config.defaultColor,
   );
-  final analyzer = _PageLayoutAnalyzer(
-    config,
-    StyleResolver(
+  try {
+    final matches = CssMatchContext();
+    final resolver = StyleResolver(
       stylesheet: document.stylesheet,
       rootStyle: rootStyle,
       availableWidth: availableWidth,
@@ -61,13 +62,20 @@ bool hasNoHtmlPageLayout(
         width: availableWidth,
         config: config,
         brightness: brightness,
+        matchContext: matches,
       ).brightness,
-    ),
-  );
-  final content = analyzer.visit(document.root, rootStyle, isRoot: true);
-  return content.weight > 0 &&
-      !analyzer.hasCustomContent &&
-      content.layoutWeight * 2 < content.weight;
+      matchContext: matches,
+    );
+    final parent = resolver.documentParentStyle(document.root);
+    if (parent.display == CssDisplay.none) return false;
+    final analyzer = _PageLayoutAnalyzer(config, resolver);
+    final content = analyzer.visit(document.root, parent, isRoot: true);
+    return content.weight > 0 &&
+        !analyzer.hasCustomContent &&
+        content.layoutWeight * 2 < content.weight;
+  } on CssMatchLimitException {
+    return false;
+  }
 }
 
 class _PageLayoutAnalyzer {

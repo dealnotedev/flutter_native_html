@@ -7,13 +7,20 @@ import 'css_selector.dart';
 /// A parsed declaration block: property -> value, plus the set of properties
 /// that were marked `!important`.
 class CssDecls {
-  const CssDecls(this.values, this.important);
+  const CssDecls(
+    this.values,
+    this.important, [
+    this.pendingShorthands = const {},
+  ]);
 
   /// property -> value; custom-property names retain their case.
   final Map<String, String> values;
 
   /// Properties (subset of [values] keys) declared `!important`.
   final Set<String> important;
+
+  /// Longhand -> shorthand whose value awaits custom-property substitution.
+  final Map<String, String> pendingShorthands;
 
   static const CssDecls empty = CssDecls({}, {});
 
@@ -163,53 +170,83 @@ class CssStylesheet {
     dom.Element element,
     double width, {
     Brightness brightness = Brightness.light,
+    CssMatchContext? matchContext,
   }) {
     final matched = <_Matched>[];
     for (final rule in _candidatesFor(element)) {
+      matchContext?.visit();
       final media = rule.media;
       if (media != null && !media.matches(width, brightness: brightness)) {
         continue;
       }
-      if (rule.selector.matches(element)) matched.add(_Matched(rule));
+      if (rule.selector.matches(element, matchContext)) {
+        matched.add(_Matched(rule));
+      }
     }
     if (matched.isEmpty) return CssDecls.empty;
     matched.sort(_compare);
 
     final normal = <String, String>{};
     final important = <String, String>{};
+    final normalPending = <String, String>{};
+    final importantPending = <String, String>{};
     for (final m in matched) {
       m.rule.declarations.values.forEach((prop, value) {
         if (m.rule.declarations.important.contains(prop)) {
           important.remove(prop);
           important[prop] = value;
+          _replacePending(importantPending, prop, m.rule.declarations);
         } else {
           normal.remove(prop);
           normal[prop] = value;
+          _replacePending(normalPending, prop, m.rule.declarations);
         }
       });
     }
-    return CssDecls({...normal, ...important}, important.keys.toSet());
+    normal.removeWhere((property, _) => important.containsKey(property));
+    normalPending.removeWhere((property, _) => important.containsKey(property));
+    return CssDecls(
+      {...normal, ...important},
+      important.keys.toSet(),
+      {...normalPending, ...importantPending},
+    );
+  }
+
+  static void _replacePending(
+    Map<String, String> pending,
+    String property,
+    CssDecls source,
+  ) {
+    if (source.pendingShorthands[property] case final shorthand?) {
+      pending[property] = shorthand;
+    } else {
+      pending.remove(property);
+    }
   }
 
   /// A dark-only rule must match real content and affect a supported theme
   /// property. An unused selector or an empty marker is not a dark theme.
-  bool hasDarkStylesFor(dom.Element element, double width) =>
-      _candidatesFor(element).any((rule) {
-        final media = rule.media;
-        return media != null &&
-            media.matches(width, brightness: Brightness.dark) &&
-            !media.matches(width, brightness: Brightness.light) &&
-            rule.selector.matches(element) &&
-            rule.declarations.values.keys.any(
-              (p) =>
-                  p.startsWith('--') ||
-                  p == 'color' ||
-                  p.startsWith('background') ||
-                  p == 'display' ||
-                  p == 'visibility' ||
-                  p.startsWith('border'),
-            );
-      });
+  bool hasDarkStylesFor(
+    dom.Element element,
+    double width, {
+    CssMatchContext? matchContext,
+  }) => _candidatesFor(element).any((rule) {
+    matchContext?.visit();
+    final media = rule.media;
+    return media != null &&
+        media.matches(width, brightness: Brightness.dark) &&
+        !media.matches(width, brightness: Brightness.light) &&
+        rule.selector.matches(element, matchContext) &&
+        rule.declarations.values.keys.any(
+          (p) =>
+              p.startsWith('--') ||
+              p == 'color' ||
+              p.startsWith('background') ||
+              p == 'display' ||
+              p == 'visibility' ||
+              p.startsWith('border'),
+        );
+  });
 
   Set<CssRule> _candidatesFor(dom.Element element) {
     final candidates = <CssRule>{..._universal};

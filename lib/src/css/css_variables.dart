@@ -7,17 +7,16 @@ class CssVariables {
   final CssVariables? parent;
   final Map<String, String?> _computed = {};
   final List<String> _pending = [];
-  final Set<String> _cyclic = {};
+  late final Set<String> _dependencyCycles = _findCycles();
+  static final _references = RegExp(
+    r'''\\.|"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|var\(\s*(--[\w-]+)\s*[,)]''',
+  );
 
   String? lookup(String name) {
     if (_computed.containsKey(name)) return _computed[name];
     if (!local.containsKey(name)) return parent?.lookup(name);
-    final cycle = _pending.indexOf(name);
-    if (cycle >= 0) {
-      _cyclic.addAll(_pending.skip(cycle));
-      return null;
-    }
-    if (_pending.length >= 32) return null;
+    if (_dependencyCycles.contains(name)) return _computed[name] = null;
+    if (_pending.length >= 32 || _pending.contains(name)) return null;
     _pending.add(name);
     final raw = local[name]!;
     final result = switch (raw.trim()) {
@@ -26,7 +25,60 @@ class CssVariables {
       _ => resolve(raw),
     };
     _pending.removeLast();
-    return _computed[name] = _cyclic.contains(name) ? null : result;
+    return _computed[name] = result;
+  }
+
+  // The dependency graph includes references in fallbacks, even when
+  // substitution would never select them. Only local definitions form cycles.
+  Set<String> _findCycles() {
+    final forward = <String, Set<String>>{};
+    final reverse = <String, List<String>>{};
+    for (final MapEntry(key: name, value: value) in local.entries) {
+      final edges = <String>{
+        for (final match in _references.allMatches(value))
+          if (match.group(1) case final String target)
+            if (local.containsKey(target)) target,
+      };
+      forward[name] = edges;
+      for (final target in edges) {
+        (reverse[target] ??= []).add(name);
+      }
+    }
+
+    final visited = <String>{};
+    final order = <String>[];
+    for (final name in forward.keys) {
+      if (!visited.add(name)) continue;
+      final stack = [(name, forward[name]!.iterator)];
+      while (stack.isNotEmpty) {
+        final (current, children) = stack.last;
+        if (!children.moveNext()) {
+          order.add(current);
+          stack.removeLast();
+        } else if (visited.add(children.current)) {
+          stack.add((children.current, forward[children.current]!.iterator));
+        }
+      }
+    }
+
+    visited.clear();
+    final cycles = <String>{};
+    for (final name in order.reversed) {
+      if (!visited.add(name)) continue;
+      final pending = [name];
+      final group = <String>[];
+      while (pending.isNotEmpty) {
+        final current = pending.removeLast();
+        group.add(current);
+        for (final parent in reverse[current] ?? const <String>[]) {
+          if (visited.add(parent)) pending.add(parent);
+        }
+      }
+      if (group.length > 1 || forward[name]!.contains(name)) {
+        cycles.addAll(group);
+      }
+    }
+    return cycles;
   }
 
   String? resolve(String value, [int depth = 0]) {

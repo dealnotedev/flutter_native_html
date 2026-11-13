@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../analysis/email_color_policy.dart';
 import '../analysis/html_document_insets.dart';
 import '../config/html_render_config.dart';
+import '../css/css_selector.dart';
 import '../css/email_color_transform.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
@@ -65,9 +66,9 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
   Widget? _rendered;
   double? _renderedWidth;
   HtmlRenderConfig? _renderedConfig;
-  Color? _renderedRootColor;
   Brightness? _renderedBrightness;
   String? _renderedFontFamily;
+  TextDirection? _renderedDirection;
   bool _contentRejected = false;
   HtmlZoomController? _ownZoom;
 
@@ -157,10 +158,7 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
     final config = widget.config;
 
     if (_contentRejected) {
-      return Semantics(
-        liveRegion: true,
-        child: const Text('Email content is too large to render.'),
-      );
+      return _contentLimitNotice;
     }
 
     final ambient = DefaultTextStyle.of(context).style;
@@ -178,78 +176,24 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
         if (_rendered != null &&
             _renderedWidth == width &&
             identical(_renderedConfig, config) &&
-            _renderedRootColor == config.defaultColor &&
             _renderedBrightness == brightness &&
-            _renderedFontFamily == rootFontFamily) {
+            _renderedFontFamily == rootFontFamily &&
+            _renderedDirection == textDirection) {
           return _rendered!;
         }
-        final colors = resolveEmailColorPolicy(
-          parsed,
-          width: width,
-          config: config,
-          brightness: brightness,
-        );
-        final rootStyle = HtmlStyle(
-          textDirection: textDirection,
-          fontSize: config.baseFontSize,
-          color: config.defaultColor ?? colors.text,
-          fontFamilies: rootFontFamily != null ? [rootFontFamily] : null,
-          fallbackFontFamily: config.fallbackFontFamily,
-          lineHeight: 1.35,
-        );
-        final resolver = StyleResolver(
-          stylesheet: parsed.stylesheet,
-          rootStyle: rootStyle,
-          availableWidth: width,
-          brightness: colors.brightness,
-          canvasColor: colors.canvas,
-          colorTransform: colors.adapt
-              ? EmailColorTransform(darkBackgroundColor: colors.canvas)
-              : null,
-        );
-
-        // Rebuild the tree; release recognizers from the previous build first.
-        _disposeBuilder();
-        final builder = HtmlTreeBuilder(
-          config: config,
-          buildContext: context,
-          rootStyle: rootStyle,
-          resolver: resolver,
-          lineHeightQuirk: parsed.lineHeightQuirk,
-        );
-        _builder = builder;
-
-        final root = builder.buildRoot(parsed.root);
-        // On a narrow viewport, present an oversized (non-responsive) email
-        // whole by scaling it to fit, like a mobile mail client. Responsive
-        // emails resolve their widths to percentages and normally stay at
-        // scale 1; genuinely oversized minimum layouts are shrunk.
-        Widget rendered = !config.fitToWidth
-            ? root
-            : FitToWidth(
-                declaredWidthHint: builder.maxDeclaredFixedWidth,
-                minScale: config.fitToWidthMinScale,
-                child: root,
-              );
-        if (config.enableTextSelection) {
-          rendered = SelectionArea(child: rendered);
+        try {
+          return _buildDocument(
+            parsed,
+            config,
+            width,
+            brightness,
+            textDirection,
+            rootFontFamily,
+          );
+        } on CssMatchLimitException {
+          _disposeBuilder();
+          return _contentLimitNotice;
         }
-        var canvas = colors.canvas;
-        final html = parsed.root.parent;
-        if (html != null) {
-          final background = resolver
-              .resolve(html, rootStyle.inheritedOnly())
-              .backgroundColor;
-          if (background != null) canvas = Color.alphaBlend(background, canvas);
-        }
-        rendered = ColoredBox(color: canvas, child: rendered);
-        _rendered = rendered;
-        _renderedWidth = width;
-        _renderedConfig = config;
-        _renderedRootColor = config.defaultColor;
-        _renderedBrightness = brightness;
-        _renderedFontFamily = rootFontFamily;
-        return rendered;
       },
     );
     final Widget body =
@@ -268,12 +212,96 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
           );
     final zoom = config.zoom;
     if (zoom == null) return body;
-    // Outside the cached layout: zooming repaints and resizes, never
-    // rebuilds or re-lays out the email itself.
     return HtmlEmailZoom(
       config: zoom,
       controller: _zoomController,
       child: body,
     );
+  }
+
+  static final _contentLimitNotice = Semantics(
+    liveRegion: true,
+    child: const Text('Email content is too large to render.'),
+  );
+
+  Widget _buildDocument(
+    ParsedEmail parsed,
+    HtmlRenderConfig config,
+    double width,
+    Brightness brightness,
+    TextDirection textDirection,
+    String? rootFontFamily,
+  ) {
+    final matches = CssMatchContext();
+    final colors = resolveEmailColorPolicy(
+      parsed,
+      width: width,
+      config: config,
+      brightness: brightness,
+      matchContext: matches,
+    );
+    final rootStyle = HtmlStyle(
+      textDirection: textDirection,
+      fontSize: config.baseFontSize,
+      color: config.defaultColor ?? colors.text,
+      fontFamilies: rootFontFamily != null ? [rootFontFamily] : null,
+      fallbackFontFamily: config.fallbackFontFamily,
+      lineHeight: 1.35,
+    );
+    final resolver = StyleResolver(
+      stylesheet: parsed.stylesheet,
+      rootStyle: rootStyle,
+      availableWidth: width,
+      brightness: colors.brightness,
+      matchContext: matches,
+      canvasColor: colors.canvas,
+      colorTransform: colors.adapt
+          ? EmailColorTransform(darkBackgroundColor: colors.canvas)
+          : null,
+    );
+
+    // Rebuild the tree; release recognizers from the previous build first.
+    _disposeBuilder();
+    final builder = HtmlTreeBuilder(
+      config: config,
+      buildContext: context,
+      rootStyle: rootStyle,
+      resolver: resolver,
+      lineHeightQuirk: parsed.lineHeightQuirk,
+      allowDataUriImages: parsed.allowDataUriImages,
+    );
+    _builder = builder;
+
+    final root = builder.buildRoot(parsed.root);
+    // On a narrow viewport, present an oversized (non-responsive) email
+    // whole by scaling it to fit, like a mobile mail client. Responsive
+    // emails resolve their widths to percentages and normally stay at
+    // scale 1; genuinely oversized minimum layouts are shrunk.
+    Widget rendered = !config.fitToWidth
+        ? root
+        : FitToWidth(
+            declaredWidthHint: builder.maxDeclaredFixedWidth,
+            minScale: config.fitToWidthMinScale,
+            child: root,
+          );
+    if (config.enableTextSelection) {
+      rendered = SelectionArea(child: rendered);
+    }
+    var canvas = colors.canvas;
+    final html = parsed.root.parent;
+    if (html != null) {
+      final background = resolver
+          .resolve(html, rootStyle.inheritedOnly())
+          .backgroundColor;
+      if (background != null) canvas = Color.alphaBlend(background, canvas);
+    }
+    rendered = ColoredBox(color: canvas, child: rendered);
+    _rendered = rendered;
+    _renderedWidth = width;
+    _renderedConfig = config;
+    _renderedBrightness = brightness;
+    _renderedFontFamily = rootFontFamily;
+    _renderedDirection = textDirection;
+    return rendered;
   }
 }

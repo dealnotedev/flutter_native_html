@@ -69,7 +69,11 @@ double-tap timeout; pass `doubleTapScale: null` to avoid that delay.
 
 Untrusted inputs are bounded by `maxHtmlCharacters`, `maxDomNodes`,
 `maxCssCharacters`, and `maxCssRules`. The default resolver also caps encoded
-payloads and decoded image dimensions.
+payloads and decoded image dimensions. On native platforms,
+`DefaultHtmlImageResolver.maxRemoteImageBytes` limits each remote response to
+8 MiB by default. The renderer also bounds total CSS selector work during each
+layout and falls back to a row layout for spanning grids that exceed their
+column or occupied-slot budget.
 
 ### Message color modes
 
@@ -274,8 +278,8 @@ class CalloutHandler extends HtmlElementHandler {
 // HtmlRenderConfig(handlers: [const CalloutHandler()])
 ```
 
-The context gives handlers everything they need: `buildChildren`, `flow`,
-`decorate`, `contextFor`, the resolved `style`, and the `imageResolver`.
+The context exposes `buildChildren`, `flow`, `decorate`, `contextFor`, the
+resolved `style`, and the `imageResolver`.
 
 **Other seams:**
 - Custom image loading / caching → implement `HtmlImageResolver`.

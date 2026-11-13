@@ -359,6 +359,7 @@ class HtmlStyle {
     }
 
     specified('background-image', other.backgroundImage != null);
+    specified('background-color', other.backgroundColor != null);
     specified('float', other.float != null);
     specified(
       'line-height',
@@ -368,7 +369,9 @@ class HtmlStyle {
     return HtmlStyle(
       resets: mergedResets,
       color: other.color ?? color,
-      backgroundColor: other.backgroundColor ?? backgroundColor,
+      backgroundColor: other.resets.contains('background-color')
+          ? null
+          : other.backgroundColor ?? backgroundColor,
       backgroundImage: other.resets.contains('background-image')
           ? null
           : other.backgroundImage ?? backgroundImage,

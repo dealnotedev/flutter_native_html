@@ -45,4 +45,15 @@ class HtmlRenderContext {
   /// contains block content (caller should fall back to a block widget).
   InlineSpan? buildInline(dom.Element element) =>
       builder.buildInline(element, this);
+
+  /// Assembles inline and block results using this element's style.
+  Widget flow(List<HtmlBuildResult> results) => builder.flow(results, style);
+
+  /// Applies this element's CSS box to a widget.
+  Widget decorate(Widget content, {bool inline = false}) =>
+      builder.decorate(content, style, inline: inline);
+
+  /// Resolves a descendant, retaining inheritance through its ancestors.
+  HtmlRenderContext contextFor(dom.Element descendant) =>
+      builder.contextForDescendant(descendant, this);
 }

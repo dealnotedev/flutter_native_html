@@ -262,7 +262,7 @@ void main() {
         'background:url(data:image/png;base64,AAAA); color:red',
       );
       expect(decls.values['color'], 'red');
-      expect(decls.values['background'], contains('base64'));
+      expect(decls.values['background-image'], contains('base64'));
     });
 
     test('a statement @import does not swallow the rule after it', () {

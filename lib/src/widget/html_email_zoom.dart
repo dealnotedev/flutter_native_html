@@ -110,6 +110,16 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom>
 
   Offset? _doubleTapAt;
 
+  void _reconcileViewport() {
+    if (!mounted) return;
+    final controller = _controller;
+    final offset = _clampOffset(controller.offsetX, controller.scale);
+    if (offset != controller.offsetX) {
+      _fling.stop();
+      controller._set(controller.scale, offset);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -336,6 +346,7 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom>
         key: _boxKey,
         scale: _controller.scale,
         offsetX: _controller.offsetX,
+        onViewportChanged: _reconcileViewport,
         child: widget.child,
       ),
     );
@@ -419,28 +430,34 @@ class _EmailZoomBox extends SingleChildRenderObjectWidget {
     super.key,
     required this.scale,
     required this.offsetX,
+    required this.onViewportChanged,
     super.child,
   });
 
   final double scale;
   final double offsetX;
+  final VoidCallback onViewportChanged;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
-      _RenderEmailZoom(scale, offsetX);
+      _RenderEmailZoom(scale, offsetX, onViewportChanged);
 
   @override
   void updateRenderObject(BuildContext context, RenderObject renderObject) {
     (renderObject as _RenderEmailZoom)
       ..scale = scale
-      ..offsetX = offsetX;
+      ..offsetX = offsetX
+      ..onViewportChanged = onViewportChanged;
   }
 }
 
 /// Lays the body out at the host's width, paints it scaled and panned, and
 /// reports the scaled height so the host's scroll view grows with the zoom.
 class _RenderEmailZoom extends RenderProxyBox {
-  _RenderEmailZoom(this._scale, this._offsetX);
+  _RenderEmailZoom(this._scale, this._offsetX, this.onViewportChanged);
+
+  VoidCallback onViewportChanged;
+  bool _reconcileScheduled = false;
 
   double _scale;
   set scale(double value) {
@@ -464,10 +481,13 @@ class _RenderEmailZoom extends RenderProxyBox {
   double heightAtScale(double scale) =>
       constraints.constrainHeight((child?.size.height ?? 0) * scale);
 
-  bool get _identity => _scale == 1 && _offsetX == 0;
+  double get _paintOffset =>
+      _offsetX.clamp(0.0, maxOffsetAtScale(_scale)).toDouble();
+
+  bool get _identity => _scale == 1 && _paintOffset == 0;
 
   Matrix4 get _transform =>
-      Matrix4.translationValues(-_offsetX, 0, 0)
+      Matrix4.translationValues(-_paintOffset, 0, 0)
         ..multiply(Matrix4.diagonal3Values(_scale, _scale, 1));
 
   @override
@@ -481,6 +501,13 @@ class _RenderEmailZoom extends RenderProxyBox {
     size = constraints.constrain(
       Size(child.size.width, child.size.height * _scale),
     );
+    if (_offsetX != _paintOffset && !_reconcileScheduled) {
+      _reconcileScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _reconcileScheduled = false;
+        if (attached) onViewportChanged();
+      });
+    }
   }
 
   @override

@@ -82,9 +82,14 @@ class HtmlSanitizer {
 
   /// Sanitizes [root] in place and returns it for chaining.
   dom.Element sanitize(dom.Element root) {
+    sanitizeRootAttributes(root);
     _walk(root);
     return root;
   }
+
+  /// Cleans an ancestor of the render root without walking its other children.
+  void sanitizeRootAttributes(dom.Element root) =>
+      _cleanAttributes(root, (root.localName ?? '').toLowerCase());
 
   void _walk(dom.Element element) {
     // Iterate over a copy because we mutate the children list.

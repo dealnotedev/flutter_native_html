@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 
+import 'remote_image_provider.dart';
+
 /// The result of resolving an `<img src>` to something renderable.
 @immutable
 class HtmlImageResolution {
@@ -55,8 +57,10 @@ class DefaultHtmlImageResolver extends HtmlImageResolver {
     this.allowRemoteImages = false,
     this.inlineAttachments = const {},
     this.maxInlineImageBytes = 5 * 1024 * 1024,
+    this.maxRemoteImageBytes = 8 * 1024 * 1024,
     this.maxDecodedImageDimension = 4096,
   }) : assert(maxInlineImageBytes > 0),
+       assert(maxRemoteImageBytes > 0),
        assert(maxDecodedImageDimension > 0);
 
   final bool allowRemoteImages;
@@ -66,6 +70,9 @@ class DefaultHtmlImageResolver extends HtmlImageResolver {
 
   /// Maximum decoded size of a data URI or CID attachment accepted in memory.
   final int maxInlineImageBytes;
+
+  /// Maximum response bytes for a remote image on native platforms.
+  final int maxRemoteImageBytes;
   final int maxDecodedImageDimension;
 
   @override
@@ -81,16 +88,27 @@ class DefaultHtmlImageResolver extends HtmlImageResolver {
             ? const HtmlImageResolution.unavailable()
             : HtmlImageResolution.image(_bounded(MemoryImage(bytes)));
       case 'cid':
-        final id = value.substring(4).replaceAll(RegExp(r'^<|>$'), '');
+        final String id;
+        try {
+          id = Uri.decodeComponent(
+            value.substring(4),
+          ).replaceAll(RegExp(r'^<|>$'), '');
+        } on ArgumentError {
+          return const HtmlImageResolution.unavailable();
+        }
         final bytes = inlineAttachments[id];
         return bytes == null || bytes.length > maxInlineImageBytes
             ? const HtmlImageResolution.unavailable()
             : HtmlImageResolution.image(_bounded(MemoryImage(bytes)));
       case 'http':
       case 'https':
-        return allowRemoteImages
-            ? HtmlImageResolution.image(_bounded(NetworkImage(value)))
-            : const HtmlImageResolution.blocked();
+        if (!allowRemoteImages) return const HtmlImageResolution.blocked();
+        final uri = Uri.tryParse(value);
+        return uri == null || !uri.hasAuthority || uri.host.isEmpty
+            ? const HtmlImageResolution.unavailable()
+            : HtmlImageResolution.image(
+                _bounded(remoteImageProvider(uri, maxRemoteImageBytes)),
+              );
       default:
         return const HtmlImageResolution.unavailable();
     }
