@@ -90,6 +90,7 @@ class HtmlRenderConfig {
     this.baseFontSize = 14.0,
     this.defaultColor,
     this.defaultFontFamily,
+    this.fallbackFontFamily = 'serif',
     this.linkColor,
     this.colorMode = HtmlEmailColorMode.auto,
     this.brightness,
@@ -159,6 +160,10 @@ class HtmlRenderConfig {
 
   /// Default font family applied to the root when CSS doesn't specify one.
   final String? defaultFontFamily;
+
+  /// Family tried after named CSS fonts when the email supplies no generic
+  /// family. Use `system-ui` for the platform's standard UI font.
+  final String fallbackFontFamily;
 
   /// Overrides the default link color (the UA blue) when set.
   final Color? linkColor;
@@ -250,6 +255,7 @@ class HtmlRenderConfig {
     double? baseFontSize,
     Object? defaultColor = _unsetConfigValue,
     Object? defaultFontFamily = _unsetConfigValue,
+    String? fallbackFontFamily,
     Object? linkColor = _unsetConfigValue,
     HtmlEmailColorMode? colorMode,
     Object? brightness = _unsetConfigValue,
@@ -289,6 +295,7 @@ class HtmlRenderConfig {
       defaultFontFamily: identical(defaultFontFamily, _unsetConfigValue)
           ? this.defaultFontFamily
           : defaultFontFamily as String?,
+      fallbackFontFamily: fallbackFontFamily ?? this.fallbackFontFamily,
       linkColor: identical(linkColor, _unsetConfigValue)
           ? this.linkColor
           : linkColor as Color?,

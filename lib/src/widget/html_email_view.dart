@@ -194,6 +194,7 @@ class _HtmlEmailViewState extends State<HtmlEmailView> {
           fontSize: config.baseFontSize,
           color: config.defaultColor ?? colors.text,
           fontFamilies: rootFontFamily != null ? [rootFontFamily] : null,
+          fallbackFontFamily: config.fallbackFontFamily,
           lineHeight: 1.35,
         );
         final resolver = StyleResolver(

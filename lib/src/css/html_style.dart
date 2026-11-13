@@ -166,6 +166,7 @@ class HtmlStyle {
     this.fontWeight,
     this.fontStyle,
     this.fontFamilies,
+    this.fallbackFontFamily,
     this.textDecoration,
     this.textDecorationColor,
     this.lineHeight,
@@ -220,6 +221,7 @@ class HtmlStyle {
   final FontWeight? fontWeight;
   final FontStyle? fontStyle;
   final List<String>? fontFamilies;
+  final String? fallbackFontFamily;
   final TextDecoration? textDecoration;
   final Color? textDecorationColor;
   final double? lineHeight; // multiplier (CSS unitless / percent line-height)
@@ -326,6 +328,7 @@ class HtmlStyle {
     fontWeight: fontWeight,
     fontStyle: fontStyle,
     fontFamilies: fontFamilies,
+    fallbackFontFamily: fallbackFontFamily,
     textDecoration: textDecoration,
     textDecorationColor: textDecorationColor,
     lineHeight: lineHeight,
@@ -378,6 +381,7 @@ class HtmlStyle {
       fontWeight: other.fontWeight ?? fontWeight,
       fontStyle: other.fontStyle ?? fontStyle,
       fontFamilies: other.fontFamilies ?? fontFamilies,
+      fallbackFontFamily: other.fallbackFontFamily ?? fallbackFontFamily,
       textDecoration: other.textDecoration ?? textDecoration,
       textDecorationColor: other.textDecorationColor ?? textDecorationColor,
       lineHeight:
@@ -475,11 +479,8 @@ class HtmlStyle {
     if (families == null) return null;
     // Family names are opaque: "sans-serif-Bold" is not a generic family,
     // and a fallback containing "Bold" cannot override CSS font-weight.
-    // Exhausted CSS family lists fall back to the browser's default serif,
-    // rather than the ambient Flutter UI font. CoreText does not resolve CSS
-    // generics/browser aliases. Leaving them unresolved lets the explicit emoji
-    // fallback supply spaces and digits before platform text fallback, giving
-    // those glyphs much wider advances than the surrounding text on iOS.
+    // Resolve CSS generics and browser aliases before adding emoji fonts.
+    // Otherwise CoreText can pick emoji glyphs for spaces and digits on iOS.
     final platform = defaultTargetPlatform;
     final apple =
         platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
@@ -515,8 +516,13 @@ class HtmlStyle {
       'fantasy',
       ...systemAliases,
     };
-    return [
-      for (final family in families) ...[
+    final familiesWithFallback = [
+      ...families,
+      if (!families.any((family) => generics.contains(family.toLowerCase())))
+        fallbackFontFamily ?? 'serif',
+    ];
+    return <String>{
+      for (final family in familiesWithFallback) ...[
         generics.contains(family.toLowerCase())
             ? generic(family.toLowerCase())
             : family,
@@ -525,17 +531,15 @@ class HtmlStyle {
         if (apple && systemAliases.contains(family.toLowerCase())) 'Helvetica',
         // Helvetica is commonly the only family on email headings. Platforms
         // without it need a metrically similar sans face before the default
-        // serif/emoji fallback, while an installed custom font still wins.
+        // text and emoji fallbacks, while an installed custom font still wins.
         if (!apple && family.toLowerCase() == 'helvetica')
           generic('sans-serif'),
       ],
-      if (!families.any((family) => generics.contains(family.toLowerCase())))
-        generic('serif'),
       // Keep color glyph fallback available after an explicit CSS family list.
       // Test embedders and desktop font collections need these concrete names.
       'Apple Color Emoji',
       'Segoe UI Emoji',
       'Noto Color Emoji',
-    ];
+    }.toList();
   }
 }
