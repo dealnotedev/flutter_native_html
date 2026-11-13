@@ -340,6 +340,33 @@ void main() {
     expect(controller.offsetX, closeTo(400, 1));
   });
 
+  testWidgets('a horizontal fling coasts to the edge of a zoomed message', (
+    tester,
+  ) async {
+    final controller = HtmlZoomController();
+    addTearDown(controller.dispose);
+    final scroll = await _pump(tester, controller: controller);
+    controller.zoomTo(2);
+    await tester.pump();
+
+    await tester.flingFrom(const Offset(300, 240), const Offset(-100, 0), 2000);
+    final releasedAt = controller.offsetX;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    expect(controller.offsetX, greaterThan(releasedAt));
+    expect(scroll.offset, 0);
+
+    final touch = await tester.startGesture(const Offset(200, 240));
+    final stoppedAt = controller.offsetX;
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(controller.offsetX, stoppedAt);
+    await touch.up();
+
+    await tester.flingFrom(const Offset(300, 240), const Offset(-100, 0), 2000);
+    await tester.pumpAndSettle();
+    expect(controller.offsetX, 400);
+  });
+
   testWidgets('links stay tappable while zoomed', (tester) async {
     final controller = HtmlZoomController();
     addTearDown(controller.dispose);

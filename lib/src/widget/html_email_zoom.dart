@@ -76,7 +76,7 @@ class HtmlZoomController extends ChangeNotifier {
 /// Pinch-to-zoom for a message body that lives inside the host's scroll
 /// view. The zoomed body reports its scaled height, so the host's vertical
 /// scroll keeps working with one finger; two fingers zoom around their focal
-/// point, one finger pans horizontally while zoomed, and a double tap toggles
+/// point, one finger scrolls horizontally while zoomed, and a double tap toggles
 /// between [HtmlZoomConfig.minScale] and [HtmlZoomConfig.doubleTapScale].
 /// Links and text selection hit-test through the transform.
 class HtmlEmailZoom extends StatefulWidget {
@@ -95,7 +95,8 @@ class HtmlEmailZoom extends StatefulWidget {
   State<HtmlEmailZoom> createState() => _HtmlEmailZoomState();
 }
 
-class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
+class _HtmlEmailZoomState extends State<HtmlEmailZoom>
+    with SingleTickerProviderStateMixin {
   HtmlZoomController? _internal;
   HtmlZoomController get _controller =>
       widget.controller ?? (_internal ??= HtmlZoomController());
@@ -103,6 +104,9 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
   final _boxKey = GlobalKey();
   ({double ratio, Offset from, Offset to})? _pendingZoom;
   int? _zoomFrame;
+  late final _fling = AnimationController.unbounded(vsync: this)
+    ..addListener(_applyFling);
+  double? _flingScale;
 
   Offset? _doubleTapAt;
 
@@ -123,6 +127,7 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
     }
     if (!identical(old, _controller) || oldWidget.config != widget.config) {
       _cancelZoomFrame();
+      _fling.stop();
       _controller._configure(widget.config);
     }
   }
@@ -130,6 +135,7 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
   @override
   void dispose() {
     _cancelZoomFrame();
+    _fling.dispose();
     _controller.removeListener(_changed);
     _internal?.dispose();
     super.dispose();
@@ -137,6 +143,11 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
 
   void _changed() {
     _cancelZoomFrame();
+    if (_fling.isAnimating &&
+        (_controller.scale != _flingScale ||
+            _controller.offsetX != _fling.value)) {
+      _fling.stop();
+    }
     setState(() {});
   }
 
@@ -150,17 +161,14 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
   _RenderEmailZoom? get _box =>
       _boxKey.currentContext?.findRenderObject() as _RenderEmailZoom?;
 
-  double _clampOffset(double offsetX, double scale) {
-    final box = _box;
-    if (box == null || !box.hasSize) return 0;
-    final max = math.max(0.0, box.contentWidth * scale - box.size.width);
-    return offsetX.clamp(0.0, max).toDouble();
-  }
+  double _clampOffset(double offsetX, double scale) =>
+      offsetX.clamp(0.0, _box?.maxOffsetAtScale(scale) ?? 0.0).toDouble();
 
   ScrollPosition? get _scroll =>
       Scrollable.maybeOf(context, axis: Axis.vertical)?.position;
 
   void _scheduleZoom(double ratio, Offset from, Offset to) {
+    _fling.stop();
     final pending = _pendingZoom;
     // Compose movement from both fingers before applying the zoom limits.
     // A pair moving in parallel may momentarily change span between events.
@@ -249,6 +257,36 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
     _controller._set(scale, _clampOffset(_controller.offsetX - dx, scale));
   }
 
+  void _startFling(DragEndDetails details) {
+    final box = _box;
+    if (box == null || !box.hasSize) return;
+    final scale = _controller.scale;
+    final maxOffset = box.maxOffsetAtScale(scale);
+    if (maxOffset == 0) return;
+    final metrics = FixedScrollMetrics(
+      minScrollExtent: 0,
+      maxScrollExtent: maxOffset,
+      pixels: _controller.offsetX,
+      viewportDimension: box.size.width,
+      axisDirection: AxisDirection.right,
+      devicePixelRatio: MediaQuery.maybeDevicePixelRatioOf(context) ?? 1,
+    );
+    final simulation = const ClampingScrollPhysics().createBallisticSimulation(
+      metrics,
+      -details.velocity.pixelsPerSecond.dx,
+    );
+    if (simulation == null) return;
+    _flingScale = scale;
+    _fling.animateWith(simulation);
+  }
+
+  void _applyFling() {
+    final scale = _controller.scale;
+    final offset = _clampOffset(_fling.value, scale);
+    if (offset != _fling.value) _fling.stop();
+    _controller._set(scale, offset);
+  }
+
   void _doubleTap() {
     final at = _doubleTapAt;
     final target = widget.config.doubleTapScale;
@@ -283,11 +321,13 @@ class _HtmlEmailZoomState extends State<HtmlEmailZoom> {
         HorizontalDragGestureRecognizer:
             GestureRecognizerFactoryWithHandlers<
               HorizontalDragGestureRecognizer
-            >(
-              () => HorizontalDragGestureRecognizer(debugOwner: this),
-              (recognizer) =>
-                  recognizer.onUpdate = (details) => _panBy(details.delta.dx),
-            ),
+            >(() => HorizontalDragGestureRecognizer(debugOwner: this), (
+              recognizer,
+            ) {
+              recognizer.onDown = (_) => _fling.stop();
+              recognizer.onUpdate = (details) => _panBy(details.delta.dx);
+              recognizer.onEnd = _startFling;
+            }),
     };
     return RawGestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -417,7 +457,10 @@ class _RenderEmailZoom extends RenderProxyBox {
     markNeedsSemanticsUpdate();
   }
 
-  double get contentWidth => child?.size.width ?? 0;
+  double maxOffsetAtScale(double scale) => hasSize
+      ? math.max(0.0, (child?.size.width ?? 0) * scale - size.width)
+      : 0;
+
   double heightAtScale(double scale) =>
       constraints.constrainHeight((child?.size.height ?? 0) * scale);
 
