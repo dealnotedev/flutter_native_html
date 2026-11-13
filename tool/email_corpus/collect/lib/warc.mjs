@@ -7,6 +7,8 @@ import crypto from 'node:crypto';
 import { sleep } from './cdx.mjs';
 
 const DATA_BASE = 'https://data.commoncrawl.org';
+const MAX_RECORD_BYTES = 32 * 1024 * 1024;
+const MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 
 /** Simple concurrency limiter + global back-off when CloudFront throttles. */
 export class Pool {
@@ -55,11 +57,18 @@ export class ThrottledError extends Error {}
  * Retries with back-off; on 403/429/503 pauses the whole pool.
  */
 export async function fetchRecordBytes(pool, rec, { cacheDir, tries = 6 } = {}) {
-  const key = crypto.createHash('sha1').update(`${rec.warc_filename}:${rec.warc_record_offset}`).digest('hex');
-  const cacheFile = cacheDir ? path.join(cacheDir, key.slice(0, 2), `${key}.warc.gz`) : null;
-  if (cacheFile && fs.existsSync(cacheFile)) return fs.readFileSync(cacheFile);
   const start = Number(rec.warc_record_offset);
-  const end = start + Number(rec.warc_record_length) - 1;
+  const length = Number(rec.warc_record_length);
+  const end = start + length - 1;
+  if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(end) ||
+      !Number.isSafeInteger(length) || length < 1 || length > MAX_RECORD_BYTES) {
+    throw new RangeError('WARC record range is invalid or too large');
+  }
+  const key = crypto.createHash('sha1').update(`${rec.warc_filename}:${start}:${length}`).digest('hex');
+  const cacheFile = cacheDir ? path.join(cacheDir, key.slice(0, 2), `${key}.warc.gz`) : null;
+  if (cacheFile && fs.statSync(cacheFile, { throwIfNoEntry: false })?.size === length) {
+    return fs.readFileSync(cacheFile);
+  }
   const url = `${DATA_BASE}/${rec.warc_filename}`;
   let delay = 5000;
   let lastErr;
@@ -73,8 +82,23 @@ export async function fetchRecordBytes(pool, rec, { cacheDir, tries = 6 } = {}) 
             headers: { Range: `bytes=${start}-${end}`, 'user-agent': 'flutter_html-email-corpus/0.1 (research)' },
             signal: ctrl.signal,
           });
-          if (res.status === 206 || res.status === 200) return Buffer.from(await res.arrayBuffer());
-          await res.arrayBuffer().catch(() => {});
+          if (res.status === 206) {
+            const range = res.headers.get('content-range');
+            if (!range?.startsWith(`bytes ${start}-${end}/`)) {
+              await res.body?.cancel();
+              throw new Error('Unexpected WARC Content-Range');
+            }
+            const chunks = [];
+            let size = 0;
+            for await (const chunk of res.body) {
+              size += chunk.length;
+              if (size > length) throw new Error('WARC response exceeds the requested range');
+              chunks.push(chunk);
+            }
+            if (size !== length) throw new Error('Incomplete WARC response');
+            return Buffer.concat(chunks, size);
+          }
+          await res.body?.cancel();
           if ([403, 429, 503].includes(res.status)) {
             pool.pause(60000 * (i + 1));
             throw new ThrottledError(`HTTP ${res.status} (throttled)`);
@@ -137,7 +161,7 @@ function dechunk(buf) {
 
 /** Parse a gzipped WARC response record. */
 export function parseWarcRecord(gz) {
-  const raw = zlib.gunzipSync(gz);
+  const raw = zlib.gunzipSync(gz, { maxOutputLength: MAX_UNCOMPRESSED_BYTES });
   const e1 = indexOfCrlf2(raw);
   const warc = parseHeaderBlock(raw.slice(0, e1).toString('latin1'));
   const contentLen = Number(warc.headers['content-length'] || raw.length - e1 - 4);
@@ -151,11 +175,13 @@ export function parseWarcRecord(gz) {
     if (d) body = d;
   }
   const ce = (http.headers['content-encoding'] || '').toLowerCase();
+  const options = { maxOutputLength: MAX_UNCOMPRESSED_BYTES };
   try {
-    if (ce.includes('gzip')) body = zlib.gunzipSync(body);
-    else if (ce.includes('br')) body = zlib.brotliDecompressSync(body);
-    else if (ce.includes('deflate')) body = zlib.inflateSync(body);
-  } catch {
+    if (ce.includes('gzip')) body = zlib.gunzipSync(body, options);
+    else if (ce.includes('br')) body = zlib.brotliDecompressSync(body, options);
+    else if (ce.includes('deflate')) body = zlib.inflateSync(body, options);
+  } catch (error) {
+    if (error.code === 'ERR_BUFFER_TOO_LARGE') throw error;
     /* CC usually stores decoded payloads; keep as is */
   }
   const statusMatch = /^HTTP\/\S+\s+(\d+)/.exec(http.first || '');

@@ -14,7 +14,10 @@ export const chromePath =
   process.env.CHROME_PATH ?? 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 
 /** Viewport widths each email is rendered at. */
-export const widths = (process.env.WIDTHS ?? '375,680').split(',').map(Number);
+export const widths = [...new Set((process.env.WIDTHS ?? '375,680').split(',').map(Number))];
+if (widths.some((width) => !Number.isSafeInteger(width) || width <= 0)) {
+  throw new Error('WIDTHS must contain positive integer viewport widths');
+}
 
 /**
  * Email-client user-agent shim injected before author styles in Chrome.
@@ -55,6 +58,50 @@ export const flutterConfig = {
 
 export const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex');
 
+export function fingerprintFiles(files) {
+  const inputs = [];
+  function visit(file) {
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (stat?.isDirectory()) {
+      for (const name of fs.readdirSync(file).sort()) visit(path.join(file, name));
+    } else {
+      inputs.push([file, stat ? sha256(fs.readFileSync(file)) : null]);
+    }
+  }
+  for (const file of [...new Set(files)].sort()) visit(file);
+  return sha256(JSON.stringify(inputs));
+}
+
+export function assetFingerprint(index) {
+  const files = new Map();
+  return (html) => imageUrls(html).sort().map((url) => {
+    const asset = index[url];
+    if (!asset?.file) return [url, null];
+    if (!files.has(asset.file)) {
+      files.set(asset.file, fingerprintFiles([path.join(assetsDir, asset.file)]));
+    }
+    return [url, asset.type, files.get(asset.file)];
+  });
+}
+
+export function captureJobs(corpus, dir) {
+  const jobs = new Map();
+  for (const email of corpus) {
+    const html = fs.readFileSync(email.file, 'utf8');
+    const sourceHash = sha256(html);
+    for (const width of widths) {
+      const key = jobKey(email.id, width);
+      if (jobs.has(key)) throw new Error(`Duplicate capture job: ${email.id} at ${width}px`);
+      jobs.set(key, { key, email, width, sourceHash });
+    }
+  }
+  if (!jobs.size) throw new Error('No capture jobs matched');
+  writeJson(path.join(dir, '_jobs.json'), Object.fromEntries(
+    [...jobs].map(([key, job]) => [key, { id: job.email.id, sourceHash: job.sourceHash }]),
+  ));
+  return jobs;
+}
+
 export function captureSettings(dir, settings) {
   const key = sha256(JSON.stringify(settings));
   writeJson(path.join(dir, '_capture.json'), { key, settings });
@@ -65,12 +112,26 @@ export function currentCaptureSettings(dir) {
   return readJson(path.join(dir, '_capture.json'), null)?.key;
 }
 
-export function captureKey(settingsKey, html) {
-  return sha256(settingsKey + sha256(html));
+export function captureKey(settingsKey, sourceHash, assets) {
+  return sha256(JSON.stringify([settingsKey, sourceHash, assets]));
 }
 
 export function matchesCaptureSettings(dump, settingsKey) {
   return !settingsKey || dump?.capture?.settingsKey === settingsKey;
+}
+
+export function comparisonJobs(chromeDir, flutterDir) {
+  const chrome = readJson(path.join(chromeDir, '_jobs.json'));
+  const flutter = readJson(path.join(flutterDir, '_jobs.json'));
+  return new Map([...new Set([...Object.keys(chrome), ...Object.keys(flutter)])]
+    .map((key) => {
+      const expected = chrome[key] ?? flutter[key];
+      return [key, {
+        id: expected.id,
+        sourceHash: chrome[key]?.sourceHash === flutter[key]?.sourceHash
+          ? expected.sourceHash : null,
+      }];
+    }));
 }
 
 export function hasCachedCapture(base, key) {
@@ -134,7 +195,8 @@ export function loadCorpus(source) {
 }
 
 /** Filesystem-safe key for an email id + width. */
-export const jobKey = (id, width) => `${id.replace(/[^A-Za-z0-9._-]+/g, '_')}@${width}`;
+export const jobKey = (id, width) =>
+  `${id.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 96)}-${sha256(id)}@${width}`;
 
 export function runDir(name) {
   return path.join(storeDir, 'runs', name);

@@ -6,7 +6,16 @@ import { readJson, runDir } from './common.mjs';
 const [base, next] = process.argv.slice(2);
 const i = process.argv.indexOf('--threshold');
 const threshold = i > 0 ? Number(process.argv[i + 1]) : 0.05;
-const load = (run) => new Map(readJson(path.join(runDir(run), 'results.json')).results.map((r) => [r.key, r]));
+if (!base || !next || !Number.isFinite(threshold) || threshold < 0) {
+  throw new Error('Usage: node delta.mjs <baseline run> <candidate run> [--threshold 0.05]');
+}
+const load = (run) => {
+  const { totals, results } = readJson(path.join(runDir(run), 'results.json'));
+  if (!results.length || totals?.skipped || totals?.crashed) {
+    throw new Error(`Incomplete comparison: ${run}`);
+  }
+  return new Map(results.map((r) => [r.key, r]));
+};
 const a = load(base);
 const b = load(next);
 const rows = [];
@@ -22,4 +31,10 @@ console.log(`jobs ${rows.length}; total score ${sum(a).toFixed(1)} -> ${sum(b).t
 console.log('worse:');
 for (const r of worse.slice(0, 30)) console.log(`  +${r.delta}\t${r.before} -> ${r.after}\t${r.key}\terrors ${r.errors.join('->')}`);
 console.log('better:');
+const missing = [...a.keys()].filter((key) => !b.has(key));
+const added = [...b.keys()].filter((key) => !a.has(key));
+if (missing.length || added.length) {
+  console.error(`Job sets differ: ${missing.length} missing, ${added.length} added`);
+}
+if (worse.length || missing.length || added.length) process.exitCode = 1;
 for (const r of better.slice(0, 30)) console.log(`  ${r.delta}\t${r.before} -> ${r.after}\t${r.key}\terrors ${r.errors.join('->')}`);

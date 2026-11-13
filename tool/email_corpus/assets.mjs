@@ -31,8 +31,15 @@ async function fetchOne(url) {
     });
     const type = response.headers.get('content-type') ?? '';
     if (!response.ok) return { status: response.status };
-    const body = Buffer.from(await response.arrayBuffer());
-    if (body.length > maxBytes) return { status: 'too-large', bytes: body.length };
+    const chunks = [];
+    let bytes = 0;
+    if (!response.body) return { status: 'empty' };
+    for await (const chunk of response.body) {
+      bytes += chunk.length;
+      if (bytes > maxBytes) return { status: 'too-large', bytes };
+      chunks.push(chunk);
+    }
+    const body = Buffer.concat(chunks, bytes);
     const file = sha256(url) + '.bin';
     fs.writeFileSync(path.join(assetsDir, file), body);
     return { status: 200, type, bytes: body.length, file };

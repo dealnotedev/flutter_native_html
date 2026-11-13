@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { diffArrays } from 'diff';
-import { currentCaptureSettings, harnessDir, loadCorpus, matchesCaptureSettings, readJson, repoDir, runDir, writeJson } from './common.mjs';
+import { comparisonJobs, currentCaptureSettings, loadCorpus, matchesCaptureSettings, readJson, repoDir, runDir, writeJson } from './common.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -254,25 +254,28 @@ const chromeDir = path.join(dir, 'chrome');
 const flutterDir = path.join(dir, 'flutter');
 const chromeSettings = currentCaptureSettings(chromeDir);
 const flutterSettings = currentCaptureSettings(flutterDir);
+if (!chromeSettings || !flutterSettings) throw new Error('Run both capture tools before comparing');
+const jobs = comparisonJobs(chromeDir, flutterDir);
 const results = [];
 const blocksByJob = new Map();
-let skipped = 0;
+const incomplete = [];
 // Sources whose public web view is not the sent email (e.g. Flodesk renders
 // text in SVG foreignObject on the web, as images in the email).
-const exclude = new RegExp(option('--exclude', '_flodesk-'));
-for (const file of fs.readdirSync(chromeDir)) {
-  if (!file.endsWith('.json') || file.startsWith('_')) continue;
-  const key = file.slice(0, -5);
-  if (exclude.test(key)) continue;
+const exclude = new RegExp(option('--exclude', '(?:^|/)flodesk-'));
+for (const [key, job] of jobs) {
+  if (exclude.test(job.id) || exclude.test(key)) continue;
+  const file = key + '.json';
   const chrome = readJson(path.join(chromeDir, file), null);
   const flutter = readJson(path.join(flutterDir, file), null);
-  if (!chrome || !flutter ||
+  if (!chrome || !flutter || !chrome.capture?.complete || !job.sourceHash ||
+      chrome.capture.sourceHash !== job.sourceHash ||
+      flutter.capture?.sourceHash !== job.sourceHash ||
       !matchesCaptureSettings(chrome, chromeSettings) ||
       !matchesCaptureSettings(flutter, flutterSettings)) {
-    skipped++;
+    incomplete.push(key);
     continue;
   }
-  if (!flutter.words) {
+  if (!flutter.capture.complete || !flutter.words) {
     results.push({ key, id: chrome.id, width: chrome.width, score: 9, crashed: true, errors: flutter.errors, words: chrome.words.length, issueWords: {}, blockIssues: [], imageIssues: [] });
     continue;
   }
@@ -350,7 +353,7 @@ const unsupportedCss = [...cssUsage]
   .slice(0, 80);
 
 // ---------- totals ----------
-const totals = { jobs: results.length, skipped, crashed: results.filter((r) => r.crashed).length };
+const totals = { jobs: results.length, skipped: incomplete.length, crashed: results.filter((r) => r.crashed).length };
 for (const r of results) {
   for (const [issue, words] of Object.entries(r.issueWords ?? {})) {
     const t = (totals[issue] ??= { jobs: 0, words: 0 });
@@ -368,7 +371,7 @@ for (const r of results) {
   const root = (r.errors ?? []).find((e) => !e.startsWith('RenderBox was not laid out')) ?? r.errors?.[0];
   if (root) errorKinds[errorKind(root)] = (errorKinds[errorKind(root)] ?? 0) + 1;
 }
-writeJson(path.join(dir, 'results.json'), { totals, clusters, unsupportedCss, errorKinds, results });
+writeJson(path.join(dir, 'results.json'), { totals, incomplete, clusters, unsupportedCss, errorKinds, results });
 
 // ---------- HTML report ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -410,3 +413,7 @@ for (const r of results) {
 }
 console.log(JSON.stringify(totals));
 console.log(`report: ${path.join(reportDir, 'index.html')}`);
+if (!results.length || incomplete.length || totals.crashed) {
+  console.error(`Incomplete comparison: ${incomplete.length} missing or stale, ${totals.crashed} crashed`);
+  process.exitCode = 1;
+}

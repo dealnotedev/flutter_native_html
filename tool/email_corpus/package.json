@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Browser-parity harness: renders an email corpus in headless Chrome and in flutter_native_html, then compares layout dumps.",
   "scripts": {
+    "test": "node --test capture.test.mjs",
     "fonts": "node fonts.mjs",
     "assets": "node assets.mjs",
     "chrome": "node chrome_capture.mjs",

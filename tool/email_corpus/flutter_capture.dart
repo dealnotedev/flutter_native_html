@@ -14,7 +14,8 @@ import 'package:flutter_native_html/flutter_native_html.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void runShard(String specPath) {
-  final spec = jsonDecode(File(specPath).readAsStringSync()) as Map<String, dynamic>;
+  final spec =
+      jsonDecode(File(specPath).readAsStringSync()) as Map<String, dynamic>;
   final outDir = spec['outDir'] as String;
   final assetsDir = spec['assetsDir'] as String;
   final assetIndex =
@@ -157,6 +158,7 @@ Future<void> _captureJob(
   final capture = <String, dynamic>{
     'key': job['cacheKey'],
     'settingsKey': job['settingsKey'],
+    'sourceHash': job['sourceHash'],
     'complete': false,
     'png': false,
   };
@@ -183,7 +185,8 @@ Future<void> _captureJob(
       enableTextSelection: false,
       fitToWidth: false,
       baseFontSize: (cfg['baseFontSize'] as num).toDouble(),
-      defaultTableCellSpacing: (cfg['defaultTableCellSpacing'] as num).toDouble(),
+      defaultTableCellSpacing: (cfg['defaultTableCellSpacing'] as num)
+          .toDouble(),
       defaultFontFamily: cfg['defaultFontFamily'] as String?,
     );
     final watch = Stopwatch()..start();
@@ -193,9 +196,9 @@ Future<void> _captureJob(
         debugShowCheckedModeBanner: false,
         // `--text-scale 1.5`: the phone's accessibility font size.
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context).copyWith(
-            textScaler: TextScaler.linear(textScale),
-          ),
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(textScale)),
           child: child!,
         ),
         home: Material(
@@ -224,7 +227,8 @@ Future<void> _captureJob(
       await tester.pump();
     }
     await tester.pump();
-    final root = boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final root =
+        boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
     // Wait until every <img> has pixels (data: URIs decode only now; a
     // decoded image may also need a frame to reach its RenderImage).
     int pendingImages() {
@@ -233,11 +237,15 @@ Future<void> _captureJob(
         if (node is RenderImage && node.image == null) pending++;
         node.visitChildren(visit);
       }
+
       visit(root);
       return pending;
     }
+
     for (var i = 0; i < 40 && pendingImages() > 0; i++) {
-      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
       await tester.pump();
     }
     result['pendingImages'] = pendingImages();
@@ -249,7 +257,9 @@ Future<void> _captureJob(
         final image = await root.toImage();
         try {
           final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-          File('$outDir/$key.png').writeAsBytesSync(bytes!.buffer.asUint8List());
+          File(
+            '$outDir/$key.png',
+          ).writeAsBytesSync(bytes!.buffer.asUint8List());
           return true;
         } finally {
           image.dispose();
@@ -260,7 +270,9 @@ Future<void> _captureJob(
     }
     capture['complete'] = true;
   } catch (error, stack) {
-    errors.add('harness: $error ${stack.toString().split('\n').take(3).join(' | ')}');
+    errors.add(
+      'harness: $error ${stack.toString().split('\n').take(3).join(' | ')}',
+    );
   } finally {
     for (final image in decoded.values) {
       image.dispose();
@@ -282,7 +294,9 @@ Future<void> _captureJob(
     };
     final encodable = finite(result) as Map;
     if (nonFinite > 0) {
-      (encodable['errors'] as List).add('non-finite geometry: $nonFinite values');
+      (encodable['errors'] as List).add(
+        'non-finite geometry: $nonFinite values',
+      );
       // Words without a usable position cannot be compared.
       encodable['words'] = [
         for (final w in (encodable['words'] as List? ?? const []))
@@ -391,7 +405,9 @@ class _Dumper {
           : (own.inherit ? inherited.merge(own) : own);
       if (span is TextSpan) {
         final text = span.text ?? '';
-        if (text.isNotEmpty) runs.add(_Run(offset, offset + text.length, style));
+        if (text.isNotEmpty) {
+          runs.add(_Run(offset, offset + text.length, style));
+        }
         offset += text.length;
         for (final child in span.children ?? const <InlineSpan>[]) {
           walk(child, style);

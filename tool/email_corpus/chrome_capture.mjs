@@ -5,18 +5,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import {
+  assetFingerprint,
   assetsDir,
+  captureJobs,
   captureKey,
   captureSettings,
   chromePath,
   chromeShimCss,
   clearCapture,
+  fingerprintFiles,
+  fontsManifest,
+  harnessDir,
   hasCachedCapture,
-  jobKey,
   loadCorpus,
   readJson,
   runDir,
-  widths,
+  sha256,
 } from './common.mjs';
 
 const args = process.argv.slice(2);
@@ -27,6 +31,9 @@ const option = (name, fallback) => {
 const source = args[0];
 const run = option('--run', 'pilot');
 const concurrency = Number(option('--concurrency', '8'));
+if (!Number.isSafeInteger(concurrency) || concurrency < 1) {
+  throw new Error('--concurrency must be a positive integer');
+}
 const force = args.includes('--force');
 const filter = option('--filter') ? new RegExp(option('--filter')) : null;
 // Dark-mode references: `--scheme dark` emulates prefers-color-scheme (the
@@ -39,9 +46,21 @@ if (args.includes('--scheme') && !['light', 'dark'].includes(scheme)) {
   throw new Error('--scheme must be light or dark');
 }
 const outDir = path.join(runDir(run), 'chrome');
-const settingsKey = captureSettings(outDir, { scheme, autoDark, chromePath, chromeShimCss });
-
 const assetIndex = readJson(path.join(assetsDir, 'index.json'), {});
+const assetsFor = assetFingerprint(assetIndex);
+const chrome = fs.statSync(chromePath);
+const settingsKey = captureSettings(outDir, {
+  scheme, autoDark, chromePath, chromeShimCss,
+  chromeSize: chrome.size, chromeModified: chrome.mtimeMs,
+  inputs: fingerprintFiles([
+    fontsManifest,
+    ...Object.values(readJson(fontsManifest, {}).families ?? {})
+      .flatMap((family) => family.faces.map((face) => face.file)),
+    path.join(harnessDir, 'common.mjs'),
+    path.join(harnessDir, 'chrome_capture.mjs'),
+    path.join(harnessDir, 'package-lock.json'),
+  ]),
+});
 const ORIGIN = 'http://email.test/';
 
 /** Keeps the author's doctype (forcing standards mode, like webmail) and puts the UA shim first. */
@@ -268,11 +287,12 @@ function dumpLayout() {
   return out;
 }
 
-async function captureOne(page, email, width) {
-  const key = jobKey(email.id, width);
+async function captureOne(page, { email, width, key, sourceHash }) {
   const base = path.join(outDir, key);
-  const html = prepareHtml(fs.readFileSync(email.file, 'utf8'));
-  const cacheKey = captureKey(settingsKey, html);
+  const source = fs.readFileSync(email.file, 'utf8');
+  if (sha256(source) !== sourceHash) throw new Error('HTML changed during capture');
+  const html = prepareHtml(source);
+  const cacheKey = captureKey(settingsKey, sourceHash, assetsFor(html));
   if (!force && hasCachedCapture(base, cacheKey)) return 'cached';
   clearCapture(base);
   page.removeAllListeners('request');
@@ -308,13 +328,13 @@ async function captureOne(page, email, width) {
     clip: { x: 0, y: 0, width, height },
     captureBeyondViewport: true,
   });
-  dump.capture = { key: cacheKey, settingsKey, complete: true, png: true };
+  dump.capture = { key: cacheKey, settingsKey, sourceHash, complete: true, png: true };
   fs.writeFileSync(base + '.json', JSON.stringify(dump));
   return 'ok';
 }
 
 const corpus = loadCorpus(source).filter((email) => !filter || filter.test(email.id));
-const jobs = corpus.flatMap((email) => widths.map((width) => ({ email, width })));
+const jobs = [...captureJobs(corpus, outDir).values()];
 const browser = await puppeteer.launch({
   executablePath: chromePath,
   headless: true,
@@ -334,12 +354,12 @@ await Promise.all(
     if (scheme) await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
     if (autoDark) await client.send('Emulation.setAutoDarkModeOverride', { enabled: true });
     while (next < jobs.length) {
-      const { email, width } = jobs[next++];
+      const job = jobs[next++];
       try {
-        stats[await captureOne(page, email, width)]++;
+        stats[await captureOne(page, job)]++;
       } catch (error) {
         stats.failed++;
-        failures.push({ id: email.id, width, error: String(error.message ?? error).slice(0, 300) });
+        failures.push({ id: job.email.id, width: job.width, error: String(error.message ?? error).slice(0, 300) });
       }
       const done = stats.ok + stats.cached + stats.failed;
       if (done % 50 === 0) console.log(`${done}/${jobs.length}`, stats);
@@ -350,3 +370,4 @@ await Promise.all(
 await browser.close();
 fs.writeFileSync(path.join(outDir, '_failures.json'), JSON.stringify(failures, null, 1));
 console.log('chrome done', stats);
+if (stats.failed) process.exitCode = 1;

@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { diffArrays } from 'diff';
 import { PNG } from 'pngjs';
-import { currentCaptureSettings, loadCorpus, matchesCaptureSettings, readJson, runDir } from './common.mjs';
+import { comparisonJobs, currentCaptureSettings, loadCorpus, matchesCaptureSettings, readJson, runDir } from './common.mjs';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -23,6 +23,8 @@ const chromeDir = path.join(dir, 'chrome');
 const flutterDir = path.join(dir, 'flutter');
 const chromeSettings = currentCaptureSettings(chromeDir);
 const flutterSettings = currentCaptureSettings(flutterDir);
+if (!chromeSettings || !flutterSettings) throw new Error('Run both capture tools before comparing');
+const jobs = comparisonJobs(chromeDir, flutterDir);
 
 const lin = (v) => {
   const c = v / 255;
@@ -64,11 +66,12 @@ function sample(png, word) {
 }
 
 function sides(key) {
+  const sourceHash = jobs.get(key)?.sourceHash;
   const read = (sideDir, settings) => {
     const base = path.join(sideDir, key);
     const dump = readJson(base + '.json', null);
-    if (!Array.isArray(dump?.words) || !matchesCaptureSettings(dump, settings) ||
-        dump.capture?.complete === false || dump.capture?.png === false) return null;
+    if (!sourceHash || !Array.isArray(dump?.words) || !matchesCaptureSettings(dump, settings) ||
+        !dump.capture?.complete || !dump.capture?.png || dump.capture.sourceHash !== sourceHash) return null;
     try {
       return { dump, png: PNG.sync.read(fs.readFileSync(base + '.png')) };
     } catch (error) {
@@ -102,9 +105,7 @@ if (option('--sbs')) {
 
 const results = [];
 let skipped = 0;
-for (const file of fs.readdirSync(flutterDir)) {
-  if (!file.endsWith('.json') || file.startsWith('_')) continue;
-  const key = file.slice(0, -5);
+for (const key of jobs.keys()) {
   const { chrome, flutter } = sides(key);
   if (!chrome || !flutter) {
     skipped++;
@@ -151,6 +152,7 @@ for (const file of fs.readdirSync(flutterDir)) {
 }
 fs.writeFileSync(path.join(dir, 'dark_results.json'), JSON.stringify(results, null, 1));
 if (skipped) console.warn('Jobs without a matching capture pair:', skipped);
+if (skipped || !results.length) process.exitCode = 1;
 
 const groups = {};
 for (const r of results) {

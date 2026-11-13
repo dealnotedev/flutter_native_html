@@ -4,12 +4,15 @@
 //   [--no-png] [--shards 8] [--force] [--filter re]
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
+  assetFingerprint,
   assetsDir,
+  captureJobs,
   captureKey,
   captureSettings,
   clearCapture,
+  fingerprintFiles,
   flutterConfig,
   fontsManifest,
   harnessDir,
@@ -20,6 +23,7 @@ import {
   readJson,
   repoDir,
   runDir,
+  sha256,
   widths,
 } from './common.mjs';
 
@@ -31,6 +35,7 @@ const option = (name, fallback) => {
 const source = args[0];
 const run = option('--run', 'pilot');
 const shards = Number(option('--shards', '8'));
+if (!Number.isSafeInteger(shards) || shards < 1) throw new Error('--shards must be a positive integer');
 const force = args.includes('--force');
 const filter = option('--filter') ? new RegExp(option('--filter')) : null;
 const config = {
@@ -50,10 +55,35 @@ if (!Number.isFinite(config.textScale) || config.textScale <= 0) {
   throw new Error('--text-scale must be a positive number');
 }
 const outDir = path.join(runDir(run), 'flutter');
-const settingsKey = captureSettings(outDir, { config, png });
-
 const fonts = readJson(fontsManifest);
 const assetIndex = readJson(path.join(assetsDir, 'index.json'), {});
+const assetsFor = assetFingerprint(assetIndex);
+function flutterCommand(args) {
+  if (process.platform !== 'win32') return ['flutter', args];
+  // Generated shard paths are repo-relative and contain only these characters.
+  // cmd.exe is needed for flutter.bat on Windows.
+  if (args.some((arg) => !/^[A-Za-z0-9_./=-]+$/.test(arg))) {
+    throw new Error('Invalid Flutter argument');
+  }
+  return ['cmd.exe', ['/d', '/c', 'flutter', ...args]];
+}
+const [versionCommand, versionArgs] = flutterCommand(['--version', '--machine']);
+const flutterVersion = spawnSync(versionCommand, versionArgs, {
+  cwd: repoDir, encoding: 'utf8',
+});
+if (flutterVersion.status !== 0) {
+  throw new Error(`Cannot determine Flutter version: ${flutterVersion.stderr || flutterVersion.error}`);
+}
+const settingsKey = captureSettings(outDir, {
+  config, png, shards, flutterVersion: JSON.parse(flutterVersion.stdout),
+  inputs: fingerprintFiles([
+    path.join(repoDir, 'lib'), path.join(repoDir, 'pubspec.lock'),
+    path.join(harnessDir, 'flutter_capture.dart'),
+    path.join(harnessDir, 'common.mjs'), path.join(harnessDir, 'run_flutter.mjs'),
+    fontsManifest,
+    ...Object.values(fonts.families).flatMap((family) => family.faces.map((face) => face.file)),
+  ]),
+});
 const baseFamilies = ['Arial', 'Times New Roman', 'Courier New', 'Segoe UI', 'Segoe UI Emoji', 'Segoe UI Symbol'];
 // Chrome's Windows defaults for generics the renderer leaves unresolved.
 const genericFaces = { cursive: 'comic sans ms', fantasy: 'impact' };
@@ -161,19 +191,19 @@ function registrations(aliases, names) {
 }
 
 const corpus = loadCorpus(source).filter((email) => !filter || filter.test(email.id));
+const expected = captureJobs(corpus, outDir);
 const emails = [];
 for (const email of corpus) {
-  if (!fs.existsSync(email.file)) continue;
   const html = fs.readFileSync(email.file, 'utf8');
-  const cacheKey = captureKey(settingsKey, html);
+  const sourceHash = sha256(html);
+  const cacheKey = captureKey(settingsKey, sourceHash, assetsFor(html));
   const images = imageUrls(html).filter((url) => assetIndex[url]?.file);
   const lists = familyLists(html);
   const jobs = [];
   for (const width of widths) {
     const key = jobKey(email.id, width);
-    const base = path.join(outDir, key);
-    if (!force && hasCachedCapture(base, cacheKey)) continue;
-    jobs.push({ id: email.id, file: email.file.replace(/\\/g, '/'), width, key, images, cacheKey, settingsKey });
+    if (expected.get(key).sourceHash !== sourceHash) throw new Error(`HTML changed during capture: ${email.id}`);
+    jobs.push({ id: email.id, file: email.file.replace(/\\/g, '/'), width, key, images, cacheKey, settingsKey, sourceHash });
   }
   if (jobs.length) emails.push({ jobs, aliases: aliasMap(lists), names: [...new Set(lists.flat())] });
 }
@@ -204,16 +234,13 @@ for (const email of emails) {
   }
   for (const name of email.names) bucket.names.add(name);
 }
-const jobCount = emails.reduce((n, e) => n + e.jobs.length, 0);
-console.log(`${jobCount} flutter jobs in ${buckets.length} shards (${conflicts} emails with alias conflicts)`);
-if (!jobCount) process.exit(0);
-
 const genRoot = path.join(harnessDir, '_gen');
 fs.mkdirSync(genRoot, { recursive: true });
 const genDir = fs.mkdtempSync(path.join(genRoot, 'shards-'));
 process.on('exit', () => fs.rmSync(genDir, { recursive: true, force: true }));
 
 const testFiles = [];
+let jobCount = 0;
 buckets.forEach((bucket, shard) => {
   const name = `shard_${String(shard).padStart(2, '0')}`;
   const spec = {
@@ -224,6 +251,13 @@ buckets.forEach((bucket, shard) => {
     fonts: [...registrations(bucket.aliases, bucket.names)].map(([family, files]) => ({ name: family, files })),
     jobs: bucket.emails.flatMap((email) => email.jobs),
   };
+  const fontsKey = sha256(JSON.stringify(spec.fonts));
+  spec.jobs = spec.jobs.filter((job) => {
+    job.cacheKey = sha256(job.cacheKey + fontsKey);
+    return force || !hasCachedCapture(path.join(outDir, job.key), job.cacheKey);
+  });
+  if (!spec.jobs.length) return;
+  jobCount += spec.jobs.length;
   for (const job of spec.jobs) clearCapture(path.join(outDir, job.key));
   const specFile = path.join(genDir, `${name}.json`).replace(/\\/g, '/');
   fs.writeFileSync(specFile, JSON.stringify(spec));
@@ -231,13 +265,16 @@ buckets.forEach((bucket, shard) => {
   fs.writeFileSync(testFile, `import '../../flutter_capture.dart';\n\nvoid main() => runShard(${JSON.stringify(specFile)});\n`);
   testFiles.push(path.relative(repoDir, testFile).replace(/\\/g, '/'));
 });
+console.log(`${jobCount} flutter jobs in ${testFiles.length} shards (${conflicts} emails with alias conflicts)`);
+if (!testFiles.length) process.exit(0);
 
 const started = Date.now();
-const child = spawn(
-  'flutter',
-  ['test', `--concurrency=${shards}`, '--reporter=compact', '--no-pub', ...testFiles],
-  { cwd: repoDir, shell: true, stdio: ['ignore', 'pipe', 'pipe'] },
-);
+const [testCommand, testArgs] = flutterCommand([
+  'test', `--concurrency=${shards}`, '--reporter=compact', '--no-pub', ...testFiles,
+]);
+const child = spawn(testCommand, testArgs, {
+  cwd: repoDir, stdio: ['ignore', 'pipe', 'pipe'],
+});
 const log = fs.createWriteStream(path.join(outDir, '_flutter.log'));
 child.stdout.pipe(log);
 child.stderr.pipe(log);
