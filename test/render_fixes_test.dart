@@ -628,6 +628,52 @@ void main() {
     );
   }
 
+  testWidgets(
+    'auto table distributes extra width by the authored cell widths',
+    (tester) async {
+      for (final (cssWidth, expectedWidth) in [
+        ('100%', 330.0),
+        ('172px', 172.0),
+      ]) {
+        await tester.pumpWidget(
+          _host(
+            '<table cellpadding="0" cellspacing="0" style="width:$cssWidth">'
+            '<tr><td width="22">·</td><td width="128">Docs</td></tr>'
+            '</table>',
+            width: 330,
+          ),
+        );
+        final table = tester.getRect(find.byType(Table));
+        final label = tester.getTopLeft(
+          find.byWidget(_richContaining(tester, 'Docs')!),
+        );
+        expect(table.width, closeTo(expectedWidth, 0.1));
+        expect(label.dx - table.left, closeTo(expectedWidth * 22 / 150, 0.1));
+      }
+    },
+  );
+
+  testWidgets('vertical padding on a plain inline link leaves line height', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        '<div style="font-size:14px;line-height:21px">'
+        '<div><a href="#plain">Plain link</a></div>'
+        '<div><a href="#padded" style="padding:10px 0">Padded link</a></div>'
+        '<div>Following line</div></div>',
+        width: 330,
+      ),
+    );
+    double heightAt(String text) =>
+        tester.getTopLeft(find.byWidget(_richContaining(tester, text)!)).dy;
+    final plain = heightAt('Plain link');
+    final padded = heightAt('Padded link');
+    final following = heightAt('Following line');
+    expect(padded - plain, closeTo(21, 0.1));
+    expect(following - padded, closeTo(21, 0.1));
+  });
+
   testWidgets('direction:rtl reverses the column order', (tester) async {
     // With direction:rtl, the first column in source goes on the right (the
     // email trick for an image-first source rendering image-on-right).

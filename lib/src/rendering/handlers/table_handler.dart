@@ -340,6 +340,7 @@ class TableHandler extends HtmlElementHandler {
             context.style.tableLayoutFixed ?? false,
             shrinkToFitButtonTable,
             shrinkToFitMaxWidth,
+            canDistributeExtraWidth: !inline && !parentInlineBlock,
           )
         : null;
     final resolvedPercentHeight = native
@@ -1312,8 +1313,9 @@ class TableHandler extends HtmlElementHandler {
     bool intrinsicColumns,
     bool fixedLayout,
     bool shrinkToFitColumns,
-    double? shrinkToFitMaxWidth,
-  ) {
+    double? shrinkToFitMaxWidth, {
+    required bool canDistributeExtraWidth,
+  }) {
     final widths = <int, TableColumnWidth>{};
     var percentTotal = 0.0;
     final remainderColumns = <int>[];
@@ -1539,7 +1541,7 @@ class TableHandler extends HtmlElementHandler {
         );
       }
     }
-    _fitFixedColumnsToTable(widths, context);
+    _fitFixedColumnsToTable(widths, context, canDistributeExtraWidth);
     return (widths: widths, hasFlex: hasFlex);
   }
 
@@ -1555,10 +1557,12 @@ class TableHandler extends HtmlElementHandler {
   /// fixed columns (content-box width + padding) add up to more than the
   /// table, browsers narrow them to the table instead of widening the table
   /// (two `width="300"` cells with 10px padding share a 600px table, 299/301).
-  /// Each column still keeps its min-content (see the column width class).
+  /// An auto-layout table with spare width grows its fixed columns in their
+  /// authored proportions. Each column still keeps its min-content floor.
   void _fitFixedColumnsToTable(
     Map<int, TableColumnWidth> widths,
     HtmlRenderContext context,
+    bool canDistributeExtraWidth,
   ) {
     if (widths.isEmpty) return;
     final columns = widths.values.whereType<_FixedOrMinContentColumnWidth>();
@@ -1576,10 +1580,16 @@ class TableHandler extends HtmlElementHandler {
     final width = style.width;
     final percentWidth = width != null && width.unit == CssLengthUnit.percent;
     final declared = px(width) ?? (percentWidth ? px(style.maxWidth) : null);
-    if (declared == null || declared <= 0) return;
     final total = columns.fold<double>(0, (sum, c) => sum + c.px);
-    if (total <= declared + 0.5) return;
-    final scale = declared / total;
+    final scale = declared != null && declared > 0 && total > declared + 0.5
+        ? declared / total
+        : 1.0;
+    final distribute =
+        canDistributeExtraWidth &&
+        widths.length > 1 &&
+        style.tableLayoutFixed != true &&
+        (percentWidth || (declared != null && total < declared));
+    if (scale == 1 && !distribute) return;
     for (final entry in widths.entries.toList()) {
       final column = entry.value as _FixedOrMinContentColumnWidth;
       final fitted = column.px * scale;
@@ -1588,6 +1598,11 @@ class TableHandler extends HtmlElementHandler {
         floor: column.floor,
         shrinkFloor: column.shrinkFloor,
         preservePreferredIntrinsicWidth: column.preservePreferredIntrinsicWidth,
+        widthShare: distribute ? column.px / total : 0,
+        tableWidthLimit:
+            percentWidth || style.minWidth?.unit == CssLengthUnit.percent
+            ? double.infinity
+            : declared ?? double.infinity,
       );
     }
   }
@@ -3060,6 +3075,8 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
     this.floor = 0,
     this.shrinkFloor = 0,
     this.preservePreferredIntrinsicWidth = false,
+    this.widthShare = 0,
+    this.tableWidthLimit = double.infinity,
   });
 
   final double px;
@@ -3074,6 +3091,8 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
   /// three `width="181"` product cells on a 375px screen.
   final double shrinkFloor;
   final bool preservePreferredIntrinsicWidth;
+  final double widthShare;
+  final double tableWidthLimit;
 
   double _target(Iterable<RenderBox> cells, double containerWidth) {
     var minContent = 0.0;
@@ -3119,8 +3138,14 @@ class _FixedOrMinContentColumnWidth extends TableColumnWidth {
   }
 
   @override
-  double maxIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) =>
-      _target(cells, containerWidth);
+  double maxIntrinsicWidth(Iterable<RenderBox> cells, double containerWidth) {
+    final preferred = _target(cells, containerWidth);
+    if (widthShare <= 0 || !containerWidth.isFinite) return preferred;
+    // Keep the proportional width a preference, so min-content can still
+    // force more room for an image or long word in a neighbouring column.
+    final distributed = containerWidth.clamp(0.0, tableWidthLimit) * widthShare;
+    return distributed > preferred ? distributed : preferred;
+  }
 
   @override
   double? flex(Iterable<RenderBox> cells) => null;

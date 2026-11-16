@@ -235,10 +235,14 @@ class AnchorHandler extends HtmlElementHandler {
     final borders = style.borders;
     return (padding != null &&
             [
-              padding.top,
               padding.right,
-              padding.bottom,
               padding.left,
+              // Vertical padding alone does not change a plain inline link's
+              // line box. Button boxes still honor their vertical padding.
+              if (style.display == CssDisplay.inlineBlock) ...[
+                padding.top,
+                padding.bottom,
+              ],
             ].any((edge) => edge != null && edge.value > 0)) ||
         (borders != null &&
             [borders.top, borders.right, borders.bottom, borders.left].any(
