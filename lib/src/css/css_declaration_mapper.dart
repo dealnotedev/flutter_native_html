@@ -948,6 +948,10 @@ class CssDeclarationMapper {
         return CssDisplay.inlineBlock;
       case 'table-row':
         return CssDisplay.tableRow;
+      case 'table-row-group':
+      case 'table-header-group':
+      case 'table-footer-group':
+        return CssDisplay.tableRowGroup;
       case 'table-cell':
         return CssDisplay.tableCell;
     }

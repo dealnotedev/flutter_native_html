@@ -3,6 +3,72 @@ import 'package:flutter_native_html/flutter_native_html.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final group in ['header', 'footer']) {
+    testWidgets('table $group groups stack at the mobile breakpoint', (
+      tester,
+    ) async {
+      final html =
+          '''
+      <style>
+        @media only screen and (max-width: 480px) {
+          .card { display: table !important; width: 100% !important; }
+          .media { display: table-$group-group !important; width: 100% !important; }
+          .copy { padding-left: 20px !important; padding-right: 20px !important; }
+        }
+      </style>
+      <table width="100%" cellpadding="0" cellspacing="0"><tr class="card">
+        <td class="media" width="264">
+          <div style="width:264px;height:80px;background:#123456"></div>
+        </td>
+        <td>
+          <table cellpadding="0" cellspacing="0"><tr>
+            <td class="copy" style="padding:20px 30px 20px 20px">Card title</td>
+          </tr></table>
+        </td>
+      </tr></table>
+    ''';
+      for (final width in [420.0, 480.0, 481.0]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: width,
+                  child: HtmlEmailView(html: html),
+                ),
+              ),
+            ),
+          ),
+        );
+        final title = tester.getRect(find.text('Card title'));
+        final media = tester.getRect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is BoxDecoration &&
+                (widget.decoration as BoxDecoration).color ==
+                    const Color(0xFF123456),
+          ),
+        );
+        expect(media.width, closeTo(264, 0.1));
+        if (width <= 480) {
+          if (group == 'header') {
+            expect(title.top, greaterThanOrEqualTo(media.bottom));
+          } else {
+            expect(media.top, greaterThanOrEqualTo(title.bottom));
+          }
+          expect(title.left, closeTo(20, 0.1));
+          expect(title.width, closeTo(width - 40, 0.1));
+        } else {
+          expect(title.left, closeTo(media.right + 20, 0.1));
+          expect(title.top, lessThan(media.bottom));
+        }
+        expect(tester.takeException(), isNull);
+      }
+    });
+  }
+
   for (final fit in [false, true]) {
     testWidgets(
       'pixel column keeps percentage gutters across viewport resize (fit=$fit)',

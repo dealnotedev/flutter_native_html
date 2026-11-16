@@ -63,6 +63,13 @@ class HtmlTreeBuilder {
   /// Used by table layout to clamp cell widths that exceed their container.
   double get availableWidth => _resolver.availableWidth;
 
+  /// Authored display keyword after the cascade. Table layout uses this to
+  /// distinguish header and footer ordering within [CssDisplay.tableRowGroup].
+  String? displayKeywordFor(dom.Element element) => _resolver
+      .computedDeclarationsFor(element)['display']
+      ?.trim()
+      .toLowerCase();
+
   late final ElementRegistry _registry = ElementRegistry(
     custom: config.handlers,
   );

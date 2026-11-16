@@ -1645,6 +1645,8 @@ class TableHandler extends HtmlElementHandler {
       children.add(
         override != null
             ? context.builder.flow(override, row.ctx.style)
+            : row.formsTableWithGroups
+            ? _buildRowGroupTable(row, context, cellPadding, rtl)
             : _rowStacks(row)
             ? _buildStackedRow(row)
             : _buildRowFallback(
@@ -1867,6 +1869,58 @@ class TableHandler extends HtmlElementHandler {
     );
   }
 
+  /// A `tr` with `display:table` can contain row groups instead of having a
+  /// single row of cells. Consecutive ordinary cells form an anonymous row.
+  Widget _buildRowGroupTable(
+    _RowData row,
+    HtmlRenderContext context,
+    EdgeInsets cellPadding,
+    bool rtl,
+  ) {
+    final body = <List<_CellData>>[];
+    var ordinaryCells = <_CellData>[];
+    List<_CellData>? header;
+    List<_CellData>? footer;
+    for (final cell in row.cells) {
+      if (!cell.isRowGroup) {
+        ordinaryCells.add(cell);
+        continue;
+      }
+      if (ordinaryCells.isNotEmpty) {
+        body.add(ordinaryCells);
+        ordinaryCells = [];
+      }
+      final display = row.ctx.builder.displayKeywordFor(cell.element);
+      if (display == 'table-header-group' && header == null) {
+        header = [cell];
+      } else if (display == 'table-footer-group' && footer == null) {
+        footer = [cell];
+      } else {
+        body.add([cell]);
+      }
+    }
+    if (ordinaryCells.isNotEmpty) body.add(ordinaryCells);
+
+    return row.ctx.decorate(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final cells in [?header, ...body, ?footer])
+            _buildRowFallback(
+              row.ctx.element!,
+              context,
+              cellPadding,
+              rtl,
+              (h: 0.0, v: 0.0),
+              const [],
+              resolvedRow: _RowData(row.ctx, cells),
+            ),
+        ],
+      ),
+    );
+  }
+
   /// Renders a stacked row, preserving fixed widths on block cells while
   /// filling the row for full-width blocks/inline-blocks.
   Widget _buildStackedRow(_RowData row) {
@@ -1910,6 +1964,7 @@ class TableHandler extends HtmlElementHandler {
       s.display == CssDisplay.block || _fullWidthBlock(s);
 
   bool _rowStacks(_RowData row) {
+    if (row.formsTableWithGroups) return true;
     if (row.cells.length < 2) return false;
     return row.cells.every((c) => _stacksCell(c.ctx.style));
   }
@@ -1993,7 +2048,8 @@ class TableHandler extends HtmlElementHandler {
       // A lone spanning cell occupies the entire row. Its authored width is
       // a table sizing hint, not a cap on its final content box.
       final fullRowSpan = singleCellRow && colspan > 1;
-      final fixed = !fullRowSpan && _cellIsFixed(cellCtx, spec);
+      final fixed =
+          !fullRowSpan && !cell.isRowGroup && _cellIsFixed(cellCtx, spec);
       final wrapped = _wrapCellLink(decorated, cellEl, cellCtx);
       final sized = singleCellRow && !fixed
           ? SizedBox(width: double.infinity, child: wrapped)
@@ -2192,6 +2248,7 @@ class TableHandler extends HtmlElementHandler {
   ) {
     final regularRows = <List<_CellData>>[];
     for (final row in rows) {
+      if (row.formsTableWithGroups) continue;
       final cells = row.cells;
       // A spanning row (commonly an empty full-width spacer) does not describe
       // the ordinary column grid. Ignore it when deriving shared widths instead
@@ -3087,6 +3144,9 @@ class _RowData {
   final HtmlRenderContext ctx;
   final List<_CellData> cells;
   late int groupEnd;
+
+  bool get formsTableWithGroups =>
+      ctx.style.display == CssDisplay.table && cells.any((c) => c.isRowGroup);
 }
 
 class _CellData {
@@ -3103,6 +3163,8 @@ class _CellData {
   late final int rowSpan =
       (int.tryParse(element.attributes['rowspan'] ?? '') ?? 1).clamp(0, 65534);
   bool get hasSpan => columnSpan > 1 || rowSpan != 1;
+
+  bool get isRowGroup => ctx.style.display == CssDisplay.tableRowGroup;
 }
 
 /// All column classification facts from one traversal of the visible subtree.
