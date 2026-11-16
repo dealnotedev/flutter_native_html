@@ -20,20 +20,21 @@ class PercentPadding extends SingleChildRenderObjectWidget {
   }
 }
 
-/// Resolves a percentage width against the containing block before applying a
-/// fixed `max-width` cap.
+/// Resolves a percentage width against the containing block, optionally capped
+/// by a fixed `max-width`.
 ///
 /// Nesting Flutter's [FractionallySizedBox] inside a [ConstrainedBox] reverses
 /// that CSS order: `width:37%;max-width:230px` becomes 37% of 230px. This
 /// render object receives the containing block's loose constraint, computes
 /// the percentage from it, and only then clamps the result to [maxWidth]. It
 /// also supports intrinsic measurement, which [LayoutBuilder] cannot provide
-/// when the box lives inside a Flutter [Table].
+/// when the box lives inside a Flutter [Table]. An uncapped box uses its
+/// content's natural width when a paragraph measures it without a line width.
 class PercentMaxWidthBox extends SingleChildRenderObjectWidget {
   const PercentMaxWidthBox({
     super.key,
     required this.widthFactor,
-    required this.maxWidth,
+    this.maxWidth = double.infinity,
     required Widget child,
   }) : super(child: child);
 
@@ -71,12 +72,17 @@ class _RenderPercentMaxWidthBox extends RenderProxyBox {
   }
 
   double _targetWidth(BoxConstraints constraints) {
-    final basis = constraints.maxWidth.isFinite
-        ? constraints.maxWidth
-        : (child?.getMaxIntrinsicWidth(double.infinity) ?? _maxWidth);
-    return constraints.constrainWidth(
-      (basis * _widthFactor).clamp(0.0, _maxWidth),
-    );
+    final double width;
+    if (constraints.hasBoundedWidth) {
+      width = constraints.maxWidth * _widthFactor;
+    } else {
+      final intrinsicWidth =
+          child?.getMaxIntrinsicWidth(double.infinity) ?? 0.0;
+      width = _maxWidth.isFinite
+          ? intrinsicWidth * _widthFactor
+          : intrinsicWidth;
+    }
+    return constraints.constrainWidth(width.clamp(0.0, _maxWidth));
   }
 
   BoxConstraints _childConstraints(BoxConstraints constraints, double width) =>
@@ -88,11 +94,14 @@ class _RenderPercentMaxWidthBox extends RenderProxyBox {
       );
 
   @override
-  double computeMinIntrinsicWidth(double height) => 0;
+  double computeMinIntrinsicWidth(double height) =>
+      _maxWidth.isFinite ? 0 : super.computeMinIntrinsicWidth(height);
 
   @override
-  double computeMaxIntrinsicWidth(double height) =>
-      _widthFactor > 0 ? _maxWidth / _widthFactor.clamp(0.0, 1.0) : 0;
+  double computeMaxIntrinsicWidth(double height) {
+    if (!_maxWidth.isFinite) return super.computeMaxIntrinsicWidth(height);
+    return _widthFactor > 0 ? _maxWidth / _widthFactor.clamp(0.0, 1.0) : 0;
+  }
 
   @override
   double computeMinIntrinsicHeight(double width) =>

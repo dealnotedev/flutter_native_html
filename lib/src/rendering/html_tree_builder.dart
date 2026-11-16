@@ -678,16 +678,29 @@ class HtmlTreeBuilder {
                   const HtmlStyle(width: CssLength(100, CssLengthUnit.percent)),
                 )
               : ctx.style;
-          return [
-            ColumnResult(decorate(content, columnStyle, inline: true), pct),
-          ];
+          final column = decorate(content, columnStyle, inline: true);
+          if (percentWidth && pct >= 0) {
+            final width = pct == 0
+                ? CssLength.zero
+                : CssLength(pct, CssLengthUnit.percent);
+            return [
+              _PercentInlineBlockResult(
+                column,
+                pct,
+                () => _InlineBlockResult(
+                  _decorate(
+                    content,
+                    ctx.style.merge(HtmlStyle(width: width)),
+                    inline: true,
+                    percentagePlaceholder: true,
+                  ),
+                ),
+              ),
+            ];
+          }
+          return [ColumnResult(column, pct)];
         }
-        final box = decorate(content, ctx.style, inline: true);
-        return [
-          InlineResult(
-            WidgetSpan(alignment: PlaceholderAlignment.middle, child: box),
-          ),
-        ];
+        return [_InlineBlockResult(decorate(content, ctx.style, inline: true))];
       case CssDisplay.block:
         final results = buildChildNodes(element, ctx.childInherited);
         // A bare wrapper around one narrow floated table (Constant Contact's
@@ -1497,7 +1510,7 @@ class HtmlTreeBuilder {
       );
     }
 
-    for (final result in results) {
+    for (final result in _joinMixedInlineBlocks(results)) {
       switch (result) {
         case InlineResult():
           // Whitespace between columns (source newlines) must not break the run.
@@ -1548,6 +1561,41 @@ class HtmlTreeBuilder {
       mainAxisSize: MainAxisSize.min,
       children: children,
     );
+  }
+
+  /// Let Flutter wrap mixed inline-blocks as one paragraph. Each placeholder
+  /// measures against the full line width, so a percentage is relative to the
+  /// containing block even after a pixel-width sibling takes part of the line.
+  static Iterable<HtmlBuildResult> _joinMixedInlineBlocks(
+    List<HtmlBuildResult> results,
+  ) sync* {
+    var start = 0;
+    while (start < results.length) {
+      final first = results[start];
+      if (first is! _InlineBlockResult && first is! _PercentInlineBlockResult) {
+        yield first;
+        start++;
+        continue;
+      }
+
+      var hasNonPercentBlock = false;
+      var end = start;
+      for (; end < results.length; end++) {
+        final result = results[end];
+        if (result is _InlineBlockResult) {
+          hasNonPercentBlock = true;
+        } else if (result is! _PercentInlineBlockResult &&
+            !(result is InlineResult && result.isWhitespaceOnly)) {
+          break;
+        }
+      }
+      for (; start < end; start++) {
+        final result = results[start];
+        yield hasNonPercentBlock && result is _PercentInlineBlockResult
+            ? result.asInline()
+            : result;
+      }
+    }
   }
 
   /// The container's line-height as a [StrutStyle] floor for a [Text.rich], so
@@ -1759,7 +1807,15 @@ class HtmlTreeBuilder {
   /// When [inline] is true the result is meant to sit inside a `WidgetSpan`
   /// (inline-block), so the fixed-width Align wrapper — which exists only to
   /// resist the block flow's `stretch` — is skipped.
-  Widget decorate(Widget content, HtmlStyle style, {bool inline = false}) {
+  Widget decorate(Widget content, HtmlStyle style, {bool inline = false}) =>
+      _decorate(content, style, inline: inline);
+
+  Widget _decorate(
+    Widget content,
+    HtmlStyle style, {
+    required bool inline,
+    bool percentagePlaceholder = false,
+  }) {
     final fontSize = style.resolvedFontSize;
     final rootFontSize = _rootStyle.resolvedFontSize;
 
@@ -1958,7 +2014,7 @@ class HtmlTreeBuilder {
     }
 
     if (percentWidth != null && percentWidth >= 0) {
-      result = maxWidth == null
+      result = maxWidth == null && !percentagePlaceholder
           ? FractionallySizedBox(
               widthFactor: percentWidth,
               // HTML cell align positions this box even when its own CSS
@@ -1971,7 +2027,8 @@ class HtmlTreeBuilder {
             )
           : PercentMaxWidthBox(
               widthFactor: percentWidth,
-              maxWidth: maxWidth + (margin?.horizontal ?? 0),
+              maxWidth:
+                  (maxWidth ?? double.infinity) + (margin?.horizontal ?? 0),
               child: result,
             );
     }
@@ -2245,6 +2302,17 @@ class HtmlTreeBuilder {
       f(edges?.bottom),
     );
   }
+}
+
+class _InlineBlockResult extends InlineResult {
+  _InlineBlockResult(Widget box)
+    : super(WidgetSpan(alignment: PlaceholderAlignment.middle, child: box));
+}
+
+class _PercentInlineBlockResult extends ColumnResult {
+  const _PercentInlineBlockResult(super.widget, super.percent, this.asInline);
+
+  final InlineResult Function() asInline;
 }
 
 class _PreservedWhitespaceSpan extends TextSpan {

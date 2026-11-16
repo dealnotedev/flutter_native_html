@@ -582,6 +582,52 @@ void main() {
     expect(tester.getTopLeft(r).dx, greaterThan(tester.getTopLeft(l).dx));
   });
 
+  for (final width in [404, 180]) {
+    testWidgets(
+      'mixed-width inline-blocks wrap at their container width ($width)',
+      (tester) async {
+        await tester.pumpWidget(
+          _host(
+            '<div style="width:${width}px;font-size:0;line-height:0">'
+            '<div style="display:inline-block;width:43px;height:20px;'
+            'vertical-align:middle;background:#80868b"></div>\n'
+            '<div style="display:inline-block;width:77%;vertical-align:middle;'
+            'font-size:14px;line-height:21px">'
+            '<table width="100%" cellpadding="0" cellspacing="0">'
+            '<tr><td>Footer link</td></tr></table></div>'
+            '</div>',
+            width: 480,
+          ),
+        );
+
+        final iconBox = find.byWidgetPredicate(
+          (widget) =>
+              widget is DecoratedBox &&
+              widget.decoration is BoxDecoration &&
+              (widget.decoration as BoxDecoration).color ==
+                  const Color(0xFF80868B),
+        );
+        final icon = tester.getRect(iconBox);
+        final label = tester.getRect(
+          find.byWidget(_richContaining(tester, 'Footer link')!),
+        );
+        expect(label.width, closeTo(width * 0.77, 0.1));
+        if (width == 404) {
+          expect(label.left, closeTo(icon.right, 1));
+          expect(label.center.dy, closeTo(icon.center.dy, 1));
+        } else {
+          expect(label.left, closeTo(icon.left, 0.5));
+          expect(label.top, greaterThanOrEqualTo(icon.bottom));
+        }
+
+        final row = tester.renderObject<RenderParagraph>(
+          find.ancestor(of: iconBox, matching: find.byType(RichText)),
+        );
+        expect(row.getMaxIntrinsicHeight(double.infinity).isFinite, isTrue);
+      },
+    );
+  }
+
   testWidgets('direction:rtl reverses the column order', (tester) async {
     // With direction:rtl, the first column in source goes on the right (the
     // email trick for an image-first source rendering image-on-right).
