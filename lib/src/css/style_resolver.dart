@@ -196,6 +196,16 @@ class StyleResolver {
   /// identity of [inherited] so a different inherited context never hits.
   final Map<dom.Element, ({HtmlStyle inherited, HtmlStyle result})> _cache = {};
 
+  HtmlStyle? _resolveParentStyle(dom.Element element) {
+    final parent = element.parent;
+    if (parent == null) return null;
+    return _cache[parent]?.result ??
+        resolve(
+          parent,
+          (_resolveParentStyle(parent) ?? rootStyle).inheritedOnly(),
+        );
+  }
+
   /// Computes the full style for [element] given its parent's [inherited]
   /// (inherited-only) style.
   HtmlStyle resolve(dom.Element element, HtmlStyle inherited) {
@@ -259,6 +269,7 @@ class StyleResolver {
         declarations,
         parentFontSize: parentFontSize,
         rootFontSize: rootFontSize,
+        resolveParentStyle: () => _resolveParentStyle(element),
         elementFontSize: base.resolvedFontSize,
         inheritedFontFamilies: inherited.fontFamilies,
         inheritedColor: inherited.color,

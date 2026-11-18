@@ -54,6 +54,30 @@ void main() {
     picture.dispose();
   });
 
+  testWidgets('responsive inherited height restores the block to normal flow', (
+    tester,
+  ) async {
+    const html = '''
+      <style>
+        @media (max-width: 480px) {
+          .compact { display:block!important; height:inherit!important;
+                     overflow:visible!important }
+        }
+      </style>
+      <div class="compact" style="display:none;height:0;overflow:hidden">
+        <div>First line</div><div>Last line</div>
+      </div>
+      <div>Footer</div>
+    ''';
+    await _pump(tester, html, width: 600);
+    expect(find.text('Last line'), findsNothing);
+    await _pump(tester, html);
+    final lastLine = tester.getRect(find.text('Last line'));
+    final footer = tester.getRect(find.text('Footer'));
+    expect(lastLine.height, greaterThan(0));
+    expect(footer.top, greaterThanOrEqualTo(lastLine.bottom));
+  });
+
   testWidgets(
     'percentage image-only columns in a spaced table do not crash the row',
     (tester) async {

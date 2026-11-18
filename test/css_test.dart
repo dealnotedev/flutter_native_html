@@ -143,6 +143,61 @@ void main() {
       ['Arial'],
     );
   });
+
+  test('explicit sizing inheritance copies computed parent values', () {
+    final document = html_parser.parse('''
+      <div style="font-size:20px;width:75%;height:2em;min-width:40px;min-height:18px;
+                  max-width:100%;max-height:100px">
+        <div id="child" style="font-size:10px;width:inherit;height:inherit;
+                               min-width:inherit;min-height:inherit;
+                               max-width:inherit;max-height:inherit">
+          <div id="grandchild" style="height:var(--size, inherit)"></div>
+          <div id="implicit"></div>
+        </div>
+      </div>
+    ''');
+    final resolver = StyleResolver(
+      stylesheet: CssParser.parseStylesheet(''),
+      rootStyle: const HtmlStyle(fontSize: 16),
+    );
+    final child = document.querySelector('#child')!;
+    final childStyle = resolver.resolve(child, const HtmlStyle(fontSize: 20));
+    expect(childStyle.width?.unit, CssLengthUnit.percent);
+    expect(childStyle.width?.value, 75);
+    expect(childStyle.height?.unit, CssLengthUnit.px);
+    expect(childStyle.height?.value, 40);
+    expect(childStyle.minWidth?.value, 40);
+    expect(childStyle.minHeight?.value, 18);
+    expect(childStyle.maxWidth?.unit, CssLengthUnit.percent);
+    expect(childStyle.maxWidth?.value, 100);
+    expect(childStyle.maxHeight?.value, 100);
+    final grandchild = resolver.resolve(
+      document.querySelector('#grandchild')!,
+      childStyle.inheritedOnly(),
+    );
+    expect(grandchild.height?.value, 40);
+    final implicit = resolver.resolve(
+      document.querySelector('#implicit')!,
+      childStyle.inheritedOnly(),
+    );
+    expect(implicit.height, isNull);
+  });
+
+  test('inherited auto height overrides a presentational height', () {
+    final document = html_parser.parse('<div height="0"></div>');
+    final resolver = StyleResolver(
+      stylesheet: CssParser.parseStylesheet('div {height:inherit}'),
+      rootStyle: const HtmlStyle(),
+    );
+    expect(
+      resolver
+          .resolve(document.querySelector('div')!, const HtmlStyle())
+          .height
+          ?.isAuto,
+      isTrue,
+    );
+  });
+
   group('CssColor', () {
     test('parses hex forms', () {
       expect(CssColor.tryParse('#fff'), const Color(0xFFFFFFFF));

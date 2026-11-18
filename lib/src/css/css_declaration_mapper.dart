@@ -53,7 +53,8 @@ class CssDeclarationMapper {
       'max-width' ||
       'min-height' ||
       'max-height' =>
-        CssLength.tryParse(value) != null ||
+        keyword == 'inherit' ||
+            CssLength.tryParse(value) != null ||
             (keyword == 'none' && property.startsWith('max-')),
       'background-repeat' => _backgroundRepeat(value) != null,
       'background-size' => keyword == 'auto' || _backgroundSize(value) != null,
@@ -155,6 +156,7 @@ class CssDeclarationMapper {
     Map<String, String> decls, {
     required double parentFontSize,
     required double rootFontSize,
+    required HtmlStyle? Function() resolveParentStyle,
     double? elementFontSize,
     List<String>? inheritedFontFamilies,
     Color? inheritedColor,
@@ -163,6 +165,29 @@ class CssDeclarationMapper {
     CssBorders? baseBorders,
   }) {
     if (decls.isEmpty) return HtmlStyle.empty;
+
+    late final parentStyle = resolveParentStyle();
+    CssLength? sizingLength(String property, String value) {
+      if (value.trim().toLowerCase() != 'inherit') {
+        return _nonNegativeLength(value);
+      }
+      final length = switch (property) {
+        'width' => parentStyle?.width,
+        'height' => parentStyle?.height,
+        'min-width' => parentStyle?.minWidth,
+        'max-width' => parentStyle?.maxWidth,
+        'min-height' => parentStyle?.minHeight,
+        'max-height' => parentStyle?.maxHeight,
+        _ => null,
+      };
+      if (length case CssLength(unit: CssLengthUnit.em, value: final ems)) {
+        // Inherit the computed length; the child may use a different font size.
+        return CssLength(ems * parentStyle!.resolvedFontSize, CssLengthUnit.px);
+      }
+      // The initial width/height must override an HTML presentational hint.
+      return length ??
+          (property == 'width' || property == 'height' ? CssLength.auto : null);
+    }
 
     Color? color;
     Color? backgroundColor;
@@ -537,19 +562,22 @@ class CssDeclarationMapper {
           }
           break;
         case 'width':
-          width = _nonNegativeLength(value) ?? width;
+          width = sizingLength(prop, value);
           break;
         case 'height':
-          height = _nonNegativeLength(value) ?? height;
+          height = sizingLength(prop, value);
           break;
         case 'min-width':
-          minWidth = _nonNegativeLength(value) ?? minWidth;
+          minWidth = sizingLength(prop, value);
+          break;
+        case 'max-width':
+          maxWidth = sizingLength(prop, value);
           break;
         case 'min-height':
-          minHeight = _nonNegativeLength(value) ?? minHeight;
+          minHeight = sizingLength(prop, value);
           break;
         case 'max-height':
-          maxHeight = _nonNegativeLength(value) ?? maxHeight;
+          maxHeight = sizingLength(prop, value);
           break;
         case 'opacity':
           final parsed = double.tryParse(value.trim());
@@ -650,9 +678,6 @@ class CssDeclarationMapper {
         case 'border-bottom-left-radius':
           brBottomLeft =
               len(value.trim().split(RegExp(r'\s+')).first) ?? brBottomLeft;
-          break;
-        case 'max-width':
-          maxWidth = _nonNegativeLength(value) ?? maxWidth;
           break;
         case 'box-sizing':
           boxSizing = switch (value.trim().toLowerCase()) {
