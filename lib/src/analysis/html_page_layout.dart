@@ -7,6 +7,7 @@ import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import '../parsing/html_email_parser.dart';
+import '../parsing/html_table_attributes.dart';
 import 'email_color_policy.dart';
 
 /// Whether an email appears to have content formatting but no page layout.
@@ -202,7 +203,8 @@ class _PageLayoutAnalyzer {
       return element.attributes['role']?.toLowerCase() == 'presentation' ||
           element.attributes['role']?.toLowerCase() == 'none' ||
           element.querySelector('table') != null ||
-          _positiveAttribute(element, 'cellpadding') ||
+          (element.attributes.containsKey('cellpadding') &&
+              parseHtmlCellPadding(element.attributes['cellpadding']) > 0) ||
           _positiveAttribute(element, 'cellspacing') ||
           element.attributes['align']?.toLowerCase() == 'center';
     }

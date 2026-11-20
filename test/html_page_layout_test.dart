@@ -13,6 +13,13 @@ bool unstyled(
 );
 
 void main() {
+  test('legacy cellpadding suffix is detected as authored page spacing', () {
+    expect(
+      unstyled('<table cellpadding="32px"><tr><td>Message</td></tr></table>'),
+      isFalse,
+    );
+  });
+
   test('GitHub-style review has content formatting but no page layout', () {
     // Reduced notification fixture. Keep the avatar row, Markdown headings,
     // semantic data table, footer and hidden metadata, without private URLs.

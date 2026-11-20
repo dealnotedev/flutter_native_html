@@ -9,6 +9,7 @@ import '../css/css_length.dart';
 import '../css/html_style.dart';
 import '../css/style_resolver.dart';
 import '../parsing/html_email_parser.dart';
+import '../parsing/html_table_attributes.dart';
 import 'email_color_policy.dart';
 
 /// Estimated space already provided by a document, in layout logical pixels.
@@ -404,11 +405,7 @@ class _Estimator {
 
   _Content table(dom.Element node, HtmlStyle style, double? width) {
     final rows = <_Content>[];
-    final rawPadding = double.tryParse(node.attributes['cellpadding'] ?? '');
-    // Browsers default `td, th { padding: 1px }` (as TableHandler does).
-    final padding = rawPadding == null || !rawPadding.isFinite
-        ? 1.0
-        : _positive(rawPadding);
+    final padding = parseHtmlCellPadding(node.attributes['cellpadding']);
     // The resolved table style carries `cellspacing` / `border-spacing` /
     // `border-collapse` with their cascade order already applied.
     if (style.borderSpacingH != style.borderSpacingV) {

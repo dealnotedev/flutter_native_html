@@ -4,6 +4,7 @@ import 'package:html/dom.dart' as dom;
 
 import '../../css/css_length.dart';
 import '../../css/html_style.dart';
+import '../../parsing/html_table_attributes.dart';
 import '../../widget/fit_to_width.dart';
 import '../element_handler.dart';
 import '../html_build_result.dart';
@@ -2710,12 +2711,9 @@ class TableHandler extends HtmlElementHandler {
 
   // Browsers default `td, th { padding: 1px }` when `cellpadding` is absent.
   EdgeInsets _cellPaddingFor(dom.Element? table) {
-    if (table == null) return const EdgeInsets.all(1);
-    final raw = table.attributes['cellpadding'];
-    if (raw == null) return const EdgeInsets.all(1);
-    final value = double.tryParse(raw);
-    if (value == null) return const EdgeInsets.all(1);
-    return EdgeInsets.all(value < 0 ? 0 : value);
+    return EdgeInsets.all(
+      parseHtmlCellPadding(table?.attributes['cellpadding']),
+    );
   }
 
   /// The table's own laid-out width in px: its explicit `width`/`max-width` if

@@ -74,6 +74,16 @@ Hello</td></tr></table></td></tr></table>''').insets,
     );
   });
 
+  test('legacy cellpadding with a suffix matches the rendered insets', () {
+    expect(
+      estimate(
+        '<table width="100%" cellpadding="32px"><tr><td>Hello</td>'
+        '</tr></table>',
+      ).insets,
+      const EdgeInsets.all(32),
+    );
+  });
+
   test(
     'default cell padding and explicit cell spacing match renderer defaults',
     () {

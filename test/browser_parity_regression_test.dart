@@ -454,6 +454,37 @@ void main() {
     );
   });
 
+  for (final (value, expected) in [
+    ('32', 32.0),
+    ('32px', 32.0),
+    (' +12px', 12.0),
+    ('2.5', 2.0),
+    ('10%', 10.0),
+    ('-4', 0.0),
+    ('text', 0.0),
+    ('Infinity', 0.0),
+  ]) {
+    testWidgets('legacy cellpadding parses its integer prefix ($value)', (
+      tester,
+    ) async {
+      await _pump(
+        tester,
+        '<table cellpadding="$value" cellspacing="0"><tr><th align="left">'
+        '<div style="width:20px;height:10px;background:#123456"></div>'
+        '</th></tr></table>',
+      );
+      final content = find.byWidgetPredicate(
+        (widget) =>
+            widget is DecoratedBox &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration as BoxDecoration).color ==
+                const Color(0xFF123456),
+      );
+      expect(tester.getTopLeft(content), Offset(expected, expected));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('a min-width display:table-cell beside floats does not crash', (
     tester,
   ) async {
