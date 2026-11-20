@@ -15,18 +15,24 @@ class _Images extends HtmlImageResolver {
       HtmlImageResolution.image(src.endsWith('/one') ? _narrowImage : _image);
 }
 
-Future<void> _pump(WidgetTester tester, String html) async {
+Future<void> _pump(
+  WidgetTester tester,
+  String html, {
+  double width = 600,
+  bool fitToWidth = false,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
         body: SingleChildScrollView(
           child: SizedBox(
-            width: 600,
+            width: width,
             child: HtmlEmailView(
               html: html,
-              config: const HtmlRenderConfig(
-                imageResolver: _Images(),
+              config: HtmlRenderConfig(
+                imageResolver: const _Images(),
                 enableTextSelection: false,
+                fitToWidth: fitToWidth,
               ),
             ),
           ),
@@ -104,6 +110,86 @@ void main() {
     expect(image.size, const Size(18, 18));
     expect(label.left, closeTo(22, 0.1));
     expect(label.center.dy, closeTo(image.center.dy, 0.1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a wrap-enabled flex row keeps review actions readable', (
+    tester,
+  ) async {
+    const html =
+        '<div style="display:flex;flex-wrap:wrap;align-items:center">'
+        '<div style="width:148px">Approval</div>'
+        '<div style="width:190px"><a href="https://example.invalid/review">'
+        'Open review</a></div></div>';
+    final label = find.text('Approval');
+    final link = find.text('Open review');
+
+    await _pump(tester, html, width: 390, fitToWidth: true);
+    expect(tester.getRect(link).top, closeTo(tester.getRect(label).top, 0.1));
+    expect(tester.getRect(link).left, closeTo(148, 0.1));
+
+    await _pump(tester, html, width: 320, fitToWidth: true);
+    expect(tester.getRect(link).top, greaterThan(tester.getRect(label).top));
+    expect(tester.getRect(link).left, closeTo(0, 0.1));
+    expect(tester.getRect(link).right, lessThanOrEqualTo(320));
+
+    await _pump(
+      tester,
+      html.replaceFirst('flex-wrap:wrap', 'flex-wrap:wrap;flex-wrap:nowrap'),
+      width: 320,
+      fitToWidth: true,
+    );
+    expect(tester.getRect(link).top, closeTo(tester.getRect(label).top, 0.1));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('newsletter flex columns keep text and actions stacked', (
+    tester,
+  ) async {
+    // Reduced from the stacked paragraphs and action blocks in archived mail.
+    const html = '''
+<div style="display:flex;flex-direction:column;height:100%;align-items:flex-start">
+  <p style="margin:0">Newsletter opening</p>
+  <p style="margin:0">Event details</p>
+  <div><a href="https://example.invalid/event">See schedule</a></div>
+</div>
+''';
+    for (final width in [360.0, 680.0]) {
+      await _pump(tester, html, width: width, fitToWidth: true);
+      final opening = tester.getRect(find.text('Newsletter opening'));
+      final details = tester.getRect(find.text('Event details'));
+      final action = tester.getRect(find.text('See schedule'));
+      expect(details.left, closeTo(opening.left, 0.1));
+      expect(details.top, greaterThanOrEqualTo(opening.bottom));
+      expect(action.left, closeTo(opening.left, 0.1));
+      expect(action.top, greaterThanOrEqualTo(details.bottom));
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a media query can switch a flex column back to a row', (
+    tester,
+  ) async {
+    const html = '''
+<style>
+  .cards { display:flex; flex-direction:column }
+  @media (min-width:600px) { .cards { flex-direction:row } }
+</style>
+<div class="cards">
+  <div>First card</div><div>Second card</div>
+</div>
+''';
+    await _pump(tester, html, width: 360, fitToWidth: true);
+    final first = find.text('First card');
+    final second = find.text('Second card');
+    expect(tester.getRect(second).top, greaterThan(tester.getRect(first).top));
+
+    await _pump(tester, html, width: 680, fitToWidth: true);
+    expect(tester.getRect(second).top, closeTo(tester.getRect(first).top, 0.1));
+    expect(
+      tester.getRect(second).left,
+      greaterThan(tester.getRect(first).left),
+    );
     expect(tester.takeException(), isNull);
   });
 

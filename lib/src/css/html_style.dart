@@ -187,6 +187,8 @@ class HtmlStyle {
     this.display,
     this.alignItems,
     this.justifyContent,
+    this.flexDirection,
+    this.flexWrap,
     this.margin,
     this.padding,
     this.borders,
@@ -273,6 +275,8 @@ class HtmlStyle {
   final CssDisplay? display;
   final CrossAxisAlignment? alignItems;
   final MainAxisAlignment? justifyContent;
+  final Axis? flexDirection;
+  final bool? flexWrap;
   final CssEdges? margin;
   final CssEdges? padding;
   final CssBorders? borders;
@@ -415,6 +419,8 @@ class HtmlStyle {
       display: other.display ?? display,
       alignItems: other.alignItems ?? alignItems,
       justifyContent: other.justifyContent ?? justifyContent,
+      flexDirection: other.flexDirection ?? flexDirection,
+      flexWrap: other.flexWrap ?? flexWrap,
       margin: margin?.merge(other.margin) ?? other.margin,
       padding: padding?.merge(other.padding) ?? other.padding,
       borders: borders?.merge(other.borders) ?? other.borders,

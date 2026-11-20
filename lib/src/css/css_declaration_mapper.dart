@@ -36,6 +36,8 @@ class CssDeclarationMapper {
             _urlFrom(value) != null ||
             _gradientFrom(value) != null,
       'display' => _display(value) != null,
+      'flex-direction' => keyword == 'row' || keyword == 'column',
+      'flex-wrap' => keyword == 'nowrap' || keyword == 'wrap',
       'font-size' => _fontSize(value, 16, 16) != null,
       'font-weight' => _fontWeight(value, parent: FontWeight.normal) != null,
       'font-style' => _fontStyle(value) != null,
@@ -213,6 +215,8 @@ class CssDeclarationMapper {
     CssDisplay? display;
     CrossAxisAlignment? alignItems;
     MainAxisAlignment? justifyContent;
+    Axis? flexDirection;
+    bool? flexWrap;
     CssEdges? margin;
     CssEdges? padding;
     CssBorders? borders;
@@ -447,6 +451,20 @@ class CssDeclarationMapper {
           break;
         case 'display':
           display = _display(value) ?? display;
+          break;
+        case 'flex-direction':
+          flexDirection = switch (value.trim().toLowerCase()) {
+            'row' => Axis.horizontal,
+            'column' => Axis.vertical,
+            _ => flexDirection,
+          };
+          break;
+        case 'flex-wrap':
+          flexWrap = switch (value.trim().toLowerCase()) {
+            'wrap' => true,
+            'nowrap' => false,
+            _ => flexWrap,
+          };
           break;
         case 'align-items':
           alignItems = switch (value.trim().toLowerCase()) {
@@ -797,6 +815,8 @@ class CssDeclarationMapper {
       display: display,
       alignItems: alignItems,
       justifyContent: justifyContent,
+      flexDirection: flexDirection,
+      flexWrap: flexWrap,
       margin: margin,
       padding: padding,
       borders: borders,

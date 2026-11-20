@@ -598,7 +598,7 @@ class HtmlTreeBuilder {
       case CssDisplay.none:
         return const [];
       case CssDisplay.flex:
-        return [BlockResult(_buildFlexRow(element, ctx))];
+        return [BlockResult(_buildFlex(element, ctx))];
       case CssDisplay.inline:
         // Keep the first traversal even when this inline wrapper contains a
         // block/column. Rebuilding on fallback doubles work at every level.
@@ -743,9 +743,11 @@ class HtmlTreeBuilder {
     }
   }
 
-  /// Email icon/text flex rows. Auto-width items keep their preferred width
-  /// when it fits, but can wrap within the space left by fixed-width icons.
-  Widget _buildFlexRow(dom.Element element, HtmlRenderContext ctx) {
+  Widget _buildFlex(dom.Element element, HtmlRenderContext ctx) {
+    final column = ctx.style.flexDirection == Axis.vertical;
+    final wraps = !column && ctx.style.flexWrap == true;
+    final main = ctx.style.justifyContent ?? MainAxisAlignment.start;
+    final cross = ctx.style.alignItems ?? CrossAxisAlignment.stretch;
     final children = <Widget>[];
     for (final node in element.nodes) {
       if (node is dom.Comment || node is dom.Text && node.text.trim().isEmpty) {
@@ -757,15 +759,61 @@ class HtmlTreeBuilder {
       if (itemCtx.style.display == CssDisplay.none) continue;
       final results = _buildNode(node, ctx.childInherited);
       if (results.isEmpty) continue;
-      final item = IntrinsicWidth(child: flow(results, itemCtx.style));
+      final content = flow(results, itemCtx.style);
+      if (column) {
+        children.add(
+          cross == CrossAxisAlignment.stretch
+              ? content
+              : IntrinsicWidth(child: content),
+        );
+        continue;
+      }
+      final item = IntrinsicWidth(child: content);
       final width = node is dom.Element ? itemCtx.style.width : null;
       final fixed =
           width != null && !width.isAuto && width.unit != CssLengthUnit.percent;
-      children.add(fixed ? item : Flexible(fit: FlexFit.loose, child: item));
+      children.add(
+        wraps || fixed ? item : Flexible(fit: FlexFit.loose, child: item),
+      );
     }
-    final cross = ctx.style.alignItems ?? CrossAxisAlignment.stretch;
+    if (column) {
+      return decorate(
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: main,
+          crossAxisAlignment: cross == CrossAxisAlignment.baseline
+              ? CrossAxisAlignment.start
+              : cross,
+          textDirection: ctx.style.textDirection,
+          children: children,
+        ),
+        ctx.style,
+      );
+    }
+    if (wraps) {
+      return decorate(
+        Wrap(
+          alignment: switch (main) {
+            MainAxisAlignment.start => WrapAlignment.start,
+            MainAxisAlignment.end => WrapAlignment.end,
+            MainAxisAlignment.center => WrapAlignment.center,
+            MainAxisAlignment.spaceBetween => WrapAlignment.spaceBetween,
+            MainAxisAlignment.spaceAround => WrapAlignment.spaceAround,
+            MainAxisAlignment.spaceEvenly => WrapAlignment.spaceEvenly,
+          },
+          crossAxisAlignment: switch (cross) {
+            CrossAxisAlignment.center => WrapCrossAlignment.center,
+            CrossAxisAlignment.end => WrapCrossAlignment.end,
+            _ => WrapCrossAlignment.start,
+          },
+          textDirection: ctx.style.textDirection,
+          children: children,
+        ),
+        ctx.style,
+      );
+    }
     Widget row = Row(
-      mainAxisAlignment: ctx.style.justifyContent ?? MainAxisAlignment.start,
+      mainAxisAlignment: main,
       crossAxisAlignment: cross,
       textBaseline: cross == CrossAxisAlignment.baseline
           ? TextBaseline.alphabetic

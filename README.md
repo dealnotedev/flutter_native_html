@@ -292,17 +292,24 @@ resolved `style`, and the `imageResolver`.
 
 Supported: block/inline flow, headings, definition/ordered/unordered lists,
 links and auto-links, selectable text, tables with `colspan` and `rowspan`,
-responsive stacked columns, email-style floats, RTL, inline and CSS background
-images, box sizing, visibility/opacity/overflow clipping, white-space modes,
+responsive stacked columns, email-style floats, flex rows and columns, RTL,
+inline and CSS background images, box sizing, visibility/opacity/overflow
+clipping, white-space modes,
 `object-fit`, attribute/structural/sibling selectors, `!important`, and
 width-based `@media` rules using `px`, `em`, or `rem`, and
 `prefers-color-scheme` queries with inherited CSS color tokens.
 
-This remains an **email CSS** engine, not a browser. JavaScript, forms,
-iframe/plugin content, flex/grid, arbitrary positioning, generated content,
-web fonts, animation, print CSS, and interactive pseudo-classes are not
-executed. Unsupported declarations are ignored. Complex table column sizing is
-best-effort rather than a complete browser table-layout implementation.
+With `display:flex`, `flex-direction` supports `row` and `column`.
+Horizontal rows support `justify-content`, `align-items`, and
+`flex-wrap:wrap`. Wrapped rows group items by their preferred widths and
+support start, center, and end cross-axis alignment. Columns stack items
+vertically and support start, center, end, and stretch cross-axis alignment.
+Full Flexbox sizing, vertical wrapping, `gap`, `inline-flex`, CSS Grid, and
+web-font downloads are outside the supported subset. The renderer ignores
+unsupported declarations. Complex table column sizing uses email-specific
+heuristics. JavaScript, forms, iframe/plugin content, arbitrary positioning,
+generated content, animation, print CSS, and interactive pseudo-classes are
+outside the renderer's scope.
 
 For repeated rendering, prepare once with `HtmlEmailParser` and pass the result
 to `HtmlEmailView.document`.
