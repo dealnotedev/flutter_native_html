@@ -84,6 +84,16 @@ Hello</td></tr></table></td></tr></table>''').insets,
     );
   });
 
+  test('collapsed tables report only cell padding', () {
+    expect(
+      estimate('''
+<table width="100%" style="border-collapse:collapse;padding:16px">
+  <tr><td style="padding:4px 8px">Hello</td></tr>
+</table>''').insets,
+      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    );
+  });
+
   test(
     'default cell padding and explicit cell spacing match renderer defaults',
     () {

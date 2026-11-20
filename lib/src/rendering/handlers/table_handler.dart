@@ -6,6 +6,7 @@ import '../../css/css_length.dart';
 import '../../css/html_style.dart';
 import '../../parsing/html_table_attributes.dart';
 import '../../widget/fit_to_width.dart';
+import '../css_border_radius.dart';
 import '../element_handler.dart';
 import '../html_build_result.dart';
 import '../html_render_context.dart';
@@ -2875,7 +2876,7 @@ class TableHandler extends HtmlElementHandler {
         overflowHidden: style.overflowHidden,
         visibilityHidden: style.visibilityHidden,
         opacity: style.opacity,
-        borders: includeBorders ? _emailTableBorders(style.borders) : null,
+        borders: includeBorders ? _emailTableBorders(style) : null,
         // `width` is applied by _buildTable as a min-width floor (a CSS table
         // grows past its width to fit content), not a hard width here.
         maxWidth: style.maxWidth,
@@ -2891,8 +2892,13 @@ class TableHandler extends HtmlElementHandler {
   /// A one-CSS-pixel email rule otherwise looks heavy on high-density Flutter
   /// displays. A native zero-width BorderSide is a one-device-pixel hairline;
   /// [CssBorderSide.hairline] distinguishes it from authored `border:0`.
-  CssBorders? _emailTableBorders(CssBorders? borders) {
-    if (borders == null) return null;
+  CssBorders? _emailTableBorders(HtmlStyle style) {
+    final borders = style.borders;
+    final radius = cssBorderRadius(style);
+    // Flutter's rounded per-side border painting needs a nonzero width.
+    if (borders == null || (radius != null && radius != BorderRadius.zero)) {
+      return borders;
+    }
     CssBorderSide? thin(CssBorderSide? side) {
       if (side == null || side.width <= 0 || side.width > 1) return side;
       if (side.style != CssBorderStyle.solid) return side;

@@ -1075,4 +1075,152 @@ void main() {
     final button = tester.getRect(find.textContaining('Go'));
     expect(button.center.dx, closeTo(375 / 2, 2));
   });
+
+  testWidgets('collapsed table padding does not add to cell padding', (
+    tester,
+  ) async {
+    await _pump(tester, '''
+<table width="100%" style="border-collapse:collapse;padding:16px">
+  <tr><td style="padding:12px 8px;line-height:24px">Collapsed</td></tr>
+</table>
+<table width="100%" style="border-collapse:separate;padding:16px">
+  <tr><td style="padding:12px 8px;line-height:24px">Separate</td></tr>
+</table>
+<table width="100%" style="display:block;border-collapse:collapse;padding:16px">
+  <tr><td style="padding:12px 8px;line-height:24px">Block</td></tr>
+</table>''');
+
+    final collapsed = tester.getRect(find.text('Collapsed'));
+    final separate = tester.getRect(find.text('Separate'));
+    final block = tester.getRect(find.text('Block'));
+    expect(collapsed.topLeft, const Offset(8, 12));
+    expect(separate.topLeft, const Offset(24, 76));
+    expect(block.topLeft, const Offset(24, 156));
+  });
+
+  testWidgets('legacy cell alignment stops at a linked nested table', (
+    tester,
+  ) async {
+    String linkedTable(String cellAttribute, String label) =>
+        '''
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td $cellAttribute>
+  <a href="https://example.test/support" style="text-decoration:none">
+    <table width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td><span>$label</span></td><td width="24" align="right">›</td>
+    </tr></table>
+  </a>
+</td></tr></table>''';
+    await _pump(
+      tester,
+      linkedTable('align="center"', 'Support') +
+          linkedTable('style="text-align:center"', 'CSS aligned'),
+    );
+
+    TextAlign? alignment(String label) => tester
+        .widgetList<RichText>(find.byType(RichText))
+        .singleWhere((text) => text.text.toPlainText() == label)
+        .textAlign;
+    expect(alignment('Support'), TextAlign.start);
+    expect(alignment('CSS aligned'), TextAlign.center);
+  });
+
+  testWidgets('sized background images paint at offsets from cell edges', (
+    tester,
+  ) async {
+    const red = Color(0xffff0000);
+    const blue = Color(0xff0000ff);
+    final sprite = (await tester.runAsync(() async {
+      final recorder = ui.PictureRecorder();
+      ui.Canvas(recorder)
+        ..drawRect(const Rect.fromLTWH(0, 0, 20, 20), Paint()..color = red)
+        ..drawRect(const Rect.fromLTWH(0, 60, 20, 20), Paint()..color = blue);
+      final picture = recorder.endRecording();
+      final image = picture.toImageSync(20, 80);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      image.dispose();
+      picture.dispose();
+      return MemoryImage(bytes!.buffer.asUint8List());
+    }))!;
+
+    final capture = GlobalKey();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Align(
+          alignment: Alignment.topLeft,
+          child: RepaintBoundary(
+            key: capture,
+            child: ColoredBox(
+              color: Colors.white,
+              child: SizedBox(
+                width: 160,
+                child: HtmlEmailView(
+                  html: '''
+<table width="160" cellpadding="0" cellspacing="0">
+  <tr>
+    <td width="20" style="background:url(https://example.test/tile.png) top -6px left no-repeat;background-size:10px"></td>
+    <td height="40">First</td>
+  </tr>
+  <tr>
+    <td width="20" style="background-image:url(https://example.test/tile.png);background-position:bottom 12px right 3px;background-repeat:no-repeat;background-size:10px"></td>
+    <td height="40">Last</td>
+  </tr>
+</table>''',
+                  config: HtmlRenderConfig(
+                    imageResolver: _Images(sprite),
+                    enableTextSelection: false,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.runAsync(() => precacheImage(sprite, capture.currentContext!));
+    await tester.pumpAndSettle();
+
+    final boundary =
+        capture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+    final image = boundary.toImageSync();
+    final pixels = (await tester.runAsync(
+      () => image.toByteData(format: ui.ImageByteFormat.rawRgba),
+    ))!;
+    Color colorAt(int x, int y) =>
+        Color((pixels.getUint32((y * image.width + x) * 4) >> 8) | 0xff000000);
+    expect(colorAt(12, 64), blue);
+    expect(colorAt(12, 72), Colors.white);
+    expect(colorAt(4, 64), Colors.white);
+    expect(colorAt(5, 2), red);
+    expect(colorAt(5, 8), Colors.white);
+    image.dispose();
+  });
+
+  testWidgets('a same-color table border follows its rounded bottom corners', (
+    tester,
+  ) async {
+    await _pump(tester, '''
+<table cellpadding="0" cellspacing="0" style="display:block;width:200px;
+  border:1px solid red;border-top:0;
+  border-bottom-left-radius:16px;border-bottom-right-radius:16px">
+  <tr><td>Rounded footer</td></tr>
+</table>''');
+
+    final decoration = tester
+        .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+        .map((box) => box.decoration)
+        .whereType<BoxDecoration>()
+        .singleWhere(
+          (box) =>
+              (box.border as Border?)?.bottom.color == const Color(0xffff0000),
+        );
+    expect(
+      decoration.borderRadius,
+      const BorderRadius.vertical(bottom: Radius.circular(16)),
+    );
+    final border = decoration.border! as Border;
+    expect(border.top, BorderSide.none);
+    expect(border.left.width, 1);
+    expect(border.bottom.width, 1);
+    expect(tester.takeException(), isNull);
+  });
 }

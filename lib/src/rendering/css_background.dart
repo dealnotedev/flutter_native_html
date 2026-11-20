@@ -47,71 +47,81 @@ Widget paintCssBackground(
       ? ClipRRect(borderRadius: radius, child: child)
       : ClipRect(child: child);
 
-  // A scaled background (background-size: cover/contain/100%) fills the box —
-  // e.g. a full-bleed hero banner behind centred content.
   final size = style.backgroundSize;
   final spriteWidth = (size != null && size.endsWith('px'))
       ? double.tryParse(size.substring(0, size.length - 2))
       : null;
+  final fit = switch (size) {
+    'cover' => BoxFit.cover,
+    'contain' => BoxFit.contain,
+    '100%' => BoxFit.fitWidth,
+    _ => null,
+  };
+  final alignment =
+      style.backgroundPosition ??
+      (fit == null ? Alignment.topLeft : Alignment.center);
+  final offset = Offset(
+    style.backgroundPositionX ?? 0,
+    style.backgroundPositionY ?? 0,
+  );
   final repeat = _imageRepeat(style.backgroundRepeat);
   if (repeat != ImageRepeat.noRepeat && size == null) {
     return clip(
       _TiledBackground(
         image: resolution.provider!,
         repeat: repeat,
-        alignment: style.backgroundPosition ?? Alignment.topLeft,
+        alignment: alignment,
+        offset: offset,
         child: content,
       ),
     );
   }
-  if (size != null && spriteWidth == null) {
-    final fit = switch (size) {
-      'cover' => BoxFit.cover,
-      'contain' => BoxFit.contain,
-      _ => BoxFit.fitWidth, // '100%': scale to the box width
-    };
-    return clip(
-      Stack(
-        clipBehavior: Clip.hardEdge,
-        children: [
-          Positioned.fill(
-            child: buildHtmlImage(
-              pauseOffscreenAnimations: pauseOffscreenAnimations,
-              image: resolution.provider!,
-              fit: fit,
-              alignment: style.backgroundPosition ?? Alignment.center,
-              excludeFromSemantics: true,
-              errorBuilder: _emptyBackground,
+  final image = buildHtmlImage(
+    pauseOffscreenAnimations: pauseOffscreenAnimations,
+    image: resolution.provider!,
+    width: spriteWidth,
+    fit: offset == Offset.zero ? fit : null,
+    alignment: alignment,
+    excludeFromSemantics: true,
+    errorBuilder: _emptyBackground,
+  );
+  final Widget background;
+  if (fit != null) {
+    // Fit and move the entire bitmap before clipping to the background box.
+    background = Positioned.fill(
+      child: offset == Offset.zero
+          ? image
+          : Transform.translate(
+              offset: offset,
+              child: FittedBox(fit: fit, alignment: alignment, child: image),
             ),
-          ),
-          content,
-        ],
+    );
+  } else if (alignment.x.abs() == 1 && alignment.y.abs() == 1) {
+    background = Positioned(
+      left: alignment.x < 0 ? offset.dx : null,
+      right: alignment.x > 0 ? -offset.dx : null,
+      top: alignment.y < 0 ? offset.dy : null,
+      bottom: alignment.y > 0 ? -offset.dy : null,
+      child: image,
+    );
+  } else {
+    // Centre or position a full-size sprite relative to the free space. The
+    // image may be taller or wider than its box, which must stay unchanged.
+    background = Positioned.fill(
+      child: OverflowBox(
+        alignment: alignment,
+        minWidth: 0,
+        minHeight: 0,
+        maxWidth: double.infinity,
+        maxHeight: double.infinity,
+        child: offset == Offset.zero
+            ? image
+            : Transform.translate(offset: offset, child: image),
       ),
     );
   }
-
-  // Otherwise a CSS sprite drawn at its position — natural size, or a fixed
-  // width from `background-size:Npx` (an image bullet/icon).
-  final x = style.backgroundPositionX ?? 0;
-  final y = style.backgroundPositionY ?? 0;
   return clip(
-    Stack(
-      clipBehavior: Clip.hardEdge,
-      children: [
-        Positioned(
-          left: x,
-          top: y,
-          child: buildHtmlImage(
-            pauseOffscreenAnimations: pauseOffscreenAnimations,
-            image: resolution.provider!,
-            width: spriteWidth,
-            excludeFromSemantics: true,
-            errorBuilder: _emptyBackground,
-          ),
-        ),
-        content,
-      ],
-    ),
+    Stack(clipBehavior: Clip.hardEdge, children: [background, content]),
   );
 }
 
@@ -183,12 +193,14 @@ class _TiledBackground extends StatefulWidget {
     required this.image,
     required this.repeat,
     required this.alignment,
+    required this.offset,
     required this.child,
   });
 
   final ImageProvider image;
   final ImageRepeat repeat;
   final AlignmentGeometry alignment;
+  final Offset offset;
   final Widget child;
 
   @override
@@ -274,6 +286,7 @@ class _TiledBackgroundState extends State<_TiledBackground> {
           : _TiledBackgroundPainter(
               imageInfo: _imageInfo!,
               repeat: widget.repeat,
+              offset: widget.offset,
               alignment: widget.alignment.resolve(
                 Directionality.maybeOf(context),
               ),
@@ -288,11 +301,13 @@ class _TiledBackgroundPainter extends CustomPainter {
     required this.imageInfo,
     required this.repeat,
     required this.alignment,
+    required this.offset,
   });
 
   final ImageInfo imageInfo;
   final ImageRepeat repeat;
   final Alignment alignment;
+  final Offset offset;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -308,9 +323,11 @@ class _TiledBackgroundPainter extends CustomPainter {
         repeat == ImageRepeat.repeat || repeat == ImageRepeat.repeatX;
     final repeatY =
         repeat == ImageRepeat.repeat || repeat == ImageRepeat.repeatY;
-    final origin = alignment.alongOffset(
-      Offset(size.width - tileSize.width, size.height - tileSize.height),
-    );
+    final origin =
+        alignment.alongOffset(
+          Offset(size.width - tileSize.width, size.height - tileSize.height),
+        ) +
+        offset;
     final logicalRect = Rect.fromLTWH(
       repeatX ? 0 : origin.dx,
       repeatY ? 0 : origin.dy,
@@ -354,6 +371,7 @@ class _TiledBackgroundPainter extends CustomPainter {
     return oldDelegate.imageInfo.image != imageInfo.image ||
         oldDelegate.imageInfo.scale != imageInfo.scale ||
         oldDelegate.repeat != repeat ||
-        oldDelegate.alignment != alignment;
+        oldDelegate.alignment != alignment ||
+        oldDelegate.offset != offset;
   }
 }

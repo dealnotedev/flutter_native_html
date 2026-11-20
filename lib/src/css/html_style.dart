@@ -260,13 +260,13 @@ class HtmlStyle {
   final Color? backgroundColor;
   // A resolved background URL or CSS linear-gradient(...).
   final String? backgroundImage;
+  // Fixed offsets from the aligned position, in logical px.
   final double? backgroundPositionX;
   final double? backgroundPositionY;
-  // background-size keyword: 'cover' | 'contain' | '100%' (scale to box width).
+  // 'cover', 'contain', '100%' (scale to box width), or a fixed width like '16px'.
   // Null = draw at the image's natural size (CSS sprite behaviour).
   final String? backgroundSize;
-  // background-position as an alignment for a scaled background (e.g. `center
-  // top` -> topCenter). Null = centre.
+  // Aligns the image within the box before applying any fixed offsets.
   final Alignment? backgroundPosition;
   final CssBackgroundRepeat? backgroundRepeat;
   // Legacy `align` on td/th. It affects this cell's own content but is kept
@@ -364,6 +364,7 @@ class HtmlStyle {
 
     specified('background-image', other.backgroundImage != null);
     specified('background-color', other.backgroundColor != null);
+    specified('padding', other.padding != null);
     specified('float', other.float != null);
     specified(
       'line-height',
@@ -422,7 +423,9 @@ class HtmlStyle {
       flexDirection: other.flexDirection ?? flexDirection,
       flexWrap: other.flexWrap ?? flexWrap,
       margin: margin?.merge(other.margin) ?? other.margin,
-      padding: padding?.merge(other.padding) ?? other.padding,
+      padding: other.resets.contains('padding')
+          ? null
+          : padding?.merge(other.padding) ?? other.padding,
       borders: borders?.merge(other.borders) ?? other.borders,
       borderRadius: other.borderRadius ?? borderRadius,
       borderRadiusPercent: other.borderRadiusPercent ?? borderRadiusPercent,

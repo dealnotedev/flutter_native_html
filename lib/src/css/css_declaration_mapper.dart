@@ -59,6 +59,7 @@ class CssDeclarationMapper {
             CssLength.tryParse(value) != null ||
             (keyword == 'none' && property.startsWith('max-')),
       'background-repeat' => _backgroundRepeat(value) != null,
+      'background-position' => _parseBgPosition(value, 16, 16) != null,
       'background-size' => keyword == 'auto' || _backgroundSize(value) != null,
       _ => true,
     };
@@ -101,17 +102,17 @@ class CssDeclarationMapper {
     for (final part in parts) {
       if (part == '/') {
         afterSlash = true;
-      } else if (afterSlash && _backgroundSize(part) != null) {
+      } else if (afterSlash && size == null && _backgroundSize(part) != null) {
         size = part;
-        afterSlash = false;
       } else if (_urlFrom(part) != null || _gradientFrom(part) != null) {
         image = part;
       } else if (CssColor.tryParse(part) != null) {
         color = part;
       } else if (_backgroundRepeat(part) != null) {
         repeat = part;
-      } else if (_positionToken(part) != null ||
-          _backgroundAlignment(part) != null) {
+      } else if (!afterSlash &&
+          (_isPositionKeyword(part.toLowerCase()) ||
+              CssLength.tryParse(part)?.isAuto == false)) {
         position.add(part);
       }
     }
@@ -194,10 +195,8 @@ class CssDeclarationMapper {
     Color? color;
     Color? backgroundColor;
     String? backgroundImage;
-    double? backgroundPositionX;
-    double? backgroundPositionY;
+    String? backgroundPositionValue;
     String? backgroundSize;
-    Alignment? backgroundPosition;
     CssBackgroundRepeat? backgroundRepeat;
     double? fontSize;
     FontWeight? fontWeight;
@@ -334,21 +333,10 @@ class CssDeclarationMapper {
           } else {
             resets.remove('background-image');
           }
-          final pos = _bgPositionFrom(value);
-          if (pos != null) {
-            backgroundPositionX = pos.$1;
-            backgroundPositionY = pos.$2;
-          }
-          backgroundPosition =
-              _backgroundAlignment(value.replaceAll(_urlPattern, ' ')) ??
-              backgroundPosition;
+          final shorthand = expandShorthand('background', value);
+          backgroundPositionValue = shorthand?['background-position'];
           backgroundRepeat = _backgroundRepeat(value) ?? backgroundRepeat;
-          // `background: ... / contain|cover` carries the size after a slash.
-          final slash = value.indexOf('/');
-          if (slash >= 0) {
-            backgroundSize =
-                _backgroundSize(value.substring(slash + 1)) ?? backgroundSize;
-          }
+          backgroundSize = _backgroundSize(shorthand?['background-size'] ?? '');
           break;
         case 'background-image':
           // Empty is an explicit reset, distinct from an unspecified property
@@ -365,13 +353,7 @@ class CssDeclarationMapper {
           }
           break;
         case 'background-position':
-          final p = _parseBgPosition(value);
-          if (p != null) {
-            backgroundPositionX = p.$1;
-            backgroundPositionY = p.$2;
-          }
-          backgroundPosition =
-              _backgroundAlignment(value) ?? backgroundPosition;
+          backgroundPositionValue = value;
           break;
         case 'background-size':
           backgroundSize = _backgroundSize(value);
@@ -791,15 +773,23 @@ class CssDeclarationMapper {
       );
     }
 
+    final backgroundPosition = switch (backgroundPositionValue) {
+      final value? => _parseBgPosition(
+        value,
+        fontSize ?? elementFontSize ?? parentFontSize,
+        rootFontSize,
+      ),
+      _ => null,
+    };
     return HtmlStyle(
       resets: resets,
       color: color,
       backgroundColor: backgroundColor,
       backgroundImage: backgroundImage,
-      backgroundPositionX: backgroundPositionX,
-      backgroundPositionY: backgroundPositionY,
+      backgroundPositionX: backgroundPosition?.offset.dx,
+      backgroundPositionY: backgroundPosition?.offset.dy,
       backgroundSize: backgroundSize,
-      backgroundPosition: backgroundPosition,
+      backgroundPosition: backgroundPosition?.alignment,
       backgroundRepeat: backgroundRepeat,
       fontSize: fontSize,
       fontWeight: fontWeight,
@@ -1176,25 +1166,71 @@ class CssDeclarationMapper {
         : null;
   }
 
-  /// Best-effort `background-position` from a `background` shorthand: drops the
-  /// `url(...)` part and reads a position pair from the rest.
-  static (double, double)? _bgPositionFrom(String shorthand) =>
-      _parseBgPosition(shorthand.replaceAll(_urlPattern, ' '));
+  /// CSS positions align against the available space after sizing the image.
+  /// A third or fourth token can add an inward offset from a named edge.
+  static ({Alignment alignment, Offset offset})? _parseBgPosition(
+    String value,
+    double fontSize,
+    double rootFontSize,
+  ) {
+    final tokens = value.trim().toLowerCase().split(RegExp(r'\s+'));
+    if (tokens.length > 4) return null;
+    if (tokens.length == 1) tokens.add('center');
 
-  /// Parses `background-position` into (x, y) px. Only px/`0` offsets and the
-  /// `left`/`top` keywords resolve; `center`/`right`/`bottom`/`%` need box and
-  /// image sizes we don't have here and are skipped.
-  static (double, double)? _parseBgPosition(String value) {
-    final coords = <double>[];
-    for (final t in value.trim().split(RegExp(r'\s+'))) {
-      if (t.isEmpty) continue;
-      final v = _positionToken(t);
-      if (v != null) coords.add(v);
-      if (coords.length == 2) break;
+    final split = tokens.length > 2 && !_isPositionKeyword(tokens[1]) ? 2 : 1;
+    var x = tokens.sublist(0, split);
+    var y = tokens.sublist(split);
+    if (x.first == 'top' ||
+        x.first == 'bottom' ||
+        y.first == 'left' ||
+        y.first == 'right') {
+      if (!_isPositionKeyword(x.first) || !_isPositionKeyword(y.first)) {
+        return null;
+      }
+      (x, y) = (y, x);
     }
-    if (coords.isEmpty) return null;
-    return (coords[0], coords.length > 1 ? coords[1] : 0.0);
+
+    ({double anchor, double shift})? axis(List<String> values, Axis axis) {
+      final edge = switch ((axis, values.first)) {
+        (_, 'center') => 0.0,
+        (Axis.horizontal, 'left') || (Axis.vertical, 'top') => -1.0,
+        (Axis.horizontal, 'right') || (Axis.vertical, 'bottom') => 1.0,
+        _ => null,
+      };
+      if (values.length == 1 && edge != null) {
+        return (anchor: edge, shift: 0);
+      }
+      if (values.length > 2 ||
+          (values.length == 2 && (edge == null || edge == 0))) {
+        return null;
+      }
+      final length = CssLength.tryParse(values.last);
+      if (length == null || length.isAuto) return null;
+      final anchor = edge ?? -1.0;
+      final sign = anchor == 1 ? -1.0 : 1.0;
+      if (length.unit == CssLengthUnit.percent) {
+        return (anchor: anchor + sign * length.value / 50, shift: 0);
+      }
+      final pixels = length.resolve(
+        fontSize: fontSize,
+        rootFontSize: rootFontSize,
+      );
+      return pixels != null && pixels.isFinite
+          ? (anchor: anchor, shift: sign * pixels)
+          : null;
+    }
+
+    final horizontal = axis(x, Axis.horizontal);
+    final vertical = axis(y, Axis.vertical);
+    if (horizontal == null || vertical == null) return null;
+    return (
+      alignment: Alignment(horizontal.anchor, vertical.anchor),
+      offset: Offset(horizontal.shift, vertical.shift),
+    );
   }
+
+  static bool _isPositionKeyword(String token) =>
+      const {'left', 'right', 'top', 'bottom', 'center'}.contains(token);
 
   /// Normalises `background-size` to a value we can render: `cover`, `contain`,
   /// `100%` (scale to the box width), or a px width like `16px` (a sized sprite,
@@ -1232,66 +1268,6 @@ class CssDeclarationMapper {
       }
     }
     return null;
-  }
-
-  /// Parses `background-position` keywords/percentages into an [Alignment] for
-  /// a scaled background (e.g. `center top` -> topCenter, `left bottom`,
-  /// `100% 50%`). Returns null when nothing positional is present.
-  static Alignment? _backgroundAlignment(String value) {
-    final tokens = value
-        .trim()
-        .toLowerCase()
-        .split(RegExp(r'\s+'))
-        .where((t) => t.isNotEmpty);
-    double? x, y;
-    var sawCenter = false;
-    var i = 0;
-    for (final t in tokens) {
-      switch (t) {
-        case 'left':
-          x = -1;
-        case 'right':
-          x = 1;
-        case 'top':
-          y = -1;
-        case 'bottom':
-          y = 1;
-        case 'center':
-          sawCenter = true;
-        default:
-          if (t.endsWith('%')) {
-            final p = double.tryParse(t.replaceAll('%', ''));
-            if (p != null) {
-              final a = p / 50.0 - 1.0; // 0%->-1, 50%->0, 100%->1
-              if (i == 0) {
-                x ??= a;
-              } else {
-                y ??= a;
-              }
-            }
-          }
-      }
-      i++;
-    }
-    if (x == null && y == null && !sawCenter) return null;
-    return Alignment(x ?? 0, y ?? 0);
-  }
-
-  static double? _positionToken(String token) {
-    switch (token.toLowerCase()) {
-      case 'left':
-      case 'top':
-        return 0;
-      case 'center':
-      case 'right':
-      case 'bottom':
-        return null; // needs sizes; skip
-    }
-    final len = CssLength.tryParse(token);
-    if (len == null) return null;
-    if (len.unit == CssLengthUnit.zero) return 0;
-    if (len.unit == CssLengthUnit.px) return len.value;
-    return null; // %/em offsets unsupported
   }
 
   static _FontShorthand _fontShorthand(

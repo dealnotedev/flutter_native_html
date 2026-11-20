@@ -278,6 +278,14 @@ class StyleResolver {
         baseBorders: base.borders,
       ),
     );
+    // Table padding has no used value in the collapsing border model. A
+    // table element styled as a block still has ordinary box padding.
+    if (result.borderCollapse == true &&
+        result.padding != null &&
+        (result.display == CssDisplay.table ||
+            declarations['display']?.toLowerCase() == 'inline-table')) {
+      result = result.merge(const HtmlStyle(resets: {'padding'}));
+    }
     // An opaque background of its own covers the bitmap behind it: a white
     // content panel inside a patterned `<td background>` (Constant Contact)
     // adapts like any other surface instead of staying light in dark mode.
@@ -368,7 +376,7 @@ class StyleResolver {
     };
     return value == null
         ? HtmlStyle.empty
-        : HtmlStyle(textAlign: value, blockAlign: value);
+        : HtmlStyle(textAlign: value, blockAlign: value, legacyTextAlign: true);
   }
 
   // --- User-agent default styles ---

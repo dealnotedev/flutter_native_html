@@ -1954,9 +1954,13 @@ class HtmlTreeBuilder {
         border != null ||
         hasPatternedBorder ||
         (requestedRadius != null && style.overflowHidden == true);
-    // BoxDecoration only allows borderRadius with a uniform (or absent) border.
+    // Flutter can round nonuniform solid borders when all visible sides share
+    // a color and have a nonzero width. Other borders still need separate clips.
     final clipNonuniformBorder =
-        requestedRadius != null && border != null && !border.isUniform;
+        requestedRadius != null &&
+        border != null &&
+        !border.isUniform &&
+        !_canRoundBorder(border);
     final BorderRadius? radius = clipNonuniformBorder ? null : requestedRadius;
     final horizontalBoxExtra = style.boxSizing == CssBoxSizing.borderBox
         ? 0.0
@@ -2159,6 +2163,17 @@ class HtmlTreeBuilder {
       );
     }
     return result;
+  }
+
+  static bool _canRoundBorder(Border border) {
+    final sides = [
+      border.top,
+      border.right,
+      border.bottom,
+      border.left,
+    ].where((side) => side.style == BorderStyle.solid);
+    return sides.every((side) => side.width > 0) &&
+        sides.map((side) => side.color).toSet().length == 1;
   }
 
   static Border? _invisibleBorder(Border? border) {
